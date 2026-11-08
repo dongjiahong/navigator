@@ -48,6 +48,7 @@ type IconName =
   | "chevron"
   | "archive"
   | "more"
+  | "grip"
   | "trash"
   | "inbox"
   | "link"
@@ -63,6 +64,7 @@ const PATHS: Record<IconName, string[]> = {
   chevron: ["M9.5 5.5l6.5 6.5-6.5 6.5"],
   archive: ["M3.5 7.5h17v4h-17z", "M5.5 11.5v8h13v-8", "M9.5 15h5"],
   more: ["M6 12h.01", "M12 12h.01", "M18 12h.01"],
+  grip: ["M9.5 7h.01", "M14.5 7h.01", "M9.5 12h.01", "M14.5 12h.01", "M9.5 17h.01", "M14.5 17h.01"],
   // A bin: a lid, the handle over it, a body that narrows, and two ribs. The
   // destructive press of the panel's own strip, so it is drawn at the same
   // weight as the arrow and the cross beside it rather than filled.
