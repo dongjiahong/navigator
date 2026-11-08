@@ -1,5 +1,5 @@
 import { expect, test } from "nsh/test";
-import { openApp } from "./testkit";
+import { openApp, openPhone } from "./testkit";
 
 test("the phone list captures a card in a few taps", async () => {
   const { app, desktop } = await openApp();
@@ -26,6 +26,46 @@ test("a row completes in one tap", async () => {
   await app.wait(400);
   // The circle is the phone's fastest action: the row moves to 已完成.
   expect(app.shows("id:phone-col-done >> text:阅读《逐根 K 线解读》并做笔记")).toBe(true);
+});
+
+/**
+ * The capture sheet's two pickers, which take the draft's setters.
+ *
+ * A signal's `set` called off its own signal throws 「not a live signal」, so
+ * passing `draftTags.set` / `draftDue.set` as the callback made every chip on
+ * the capture sheet dead: a tag could not be picked and a deadline could not be
+ * set before the card was made. The phone had no other place to set either one
+ * before the card existed, so this test is the only thing holding the two
+ * wrappers in place.
+ */
+test("the capture sheet takes a tag and a day before the card exists", async () => {
+  const { app } = await openPhone();
+  if (!app) return;
+
+  await app.press("id:fab");
+  await app.waitFor("id:capture-title");
+  await app.type("id:capture-title", "带标签和期限的卡");
+
+  // No deadline yet: the picker says so, and pressing a day changes that.
+  expect(app.shows("text:没有截止时间")).toBe(true);
+  await app.press("id:due-0");
+  await app.wait(300);
+  expect(app.shows("text:没有截止时间")).toBe(false);
+  // 今天 carries 18:00, and 清除 is what a set deadline offers.
+  expect(app.shows("id:due-clear")).toBe(true);
+  expect(app.texts().some((t) => t.endsWith("18:00"))).toBe(true);
+
+  await app.press("label:标签 工作");
+  await app.wait(300);
+
+  await app.press("id:capture-save");
+  await app.wait(500);
+
+  // The card was made with both, not with a blank slate.
+  const row = app.texts();
+  expect(row).toContain("带标签和期限的卡");
+  expect(row).toContain("工作");
+  expect(row.some((t) => t.includes("18:00"))).toBe(true);
 });
 
 test("tapping a segment moves the list to that column", async () => {

@@ -696,8 +696,11 @@ function CaptureSheet() {
             padding: 0,
           }}
         />
-        <TagPicker selected={draftTags()} onChange={draftTags.set} size="phone" />
-        <DueEditor due={draftDue()} size="phone" onChange={draftDue.set} />
+        {/* The setters are wrapped, never passed as `draftTags.set`: a signal's
+            `set` called off its own signal throws 「not a live signal」, so a chip
+            pressed on the phone's capture sheet did nothing at all. */}
+        <TagPicker selected={draftTags()} onChange={(ids) => draftTags.set(ids)} size="phone" />
+        <DueEditor due={draftDue()} size="phone" onChange={(iso) => draftDue.set(iso)} />
         <View
           testID="capture-keep"
           onPress={() => setKeepAdding(!keepAdding())}
