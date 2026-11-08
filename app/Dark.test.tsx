@@ -24,6 +24,22 @@ test("mac inspector dark", async () => {
   await app.screenshot("mac-inspector-dark.png");
 });
 
+/**
+ * And in a short window, where the note is youngest: light is checked by the
+ * same shot in `Shot.test.tsx`, and the question here is whether the three lines
+ * of controls and a twenty-line note still separate in the dark panel.
+ */
+test("mac panel with a long note in a short window, dark", async () => {
+  const app = await openSized(1280, 620, DARK);
+  if (!app || !(await canDraw(app))) return;
+  await app.press("card-c2");
+  await app.waitFor("id:inspector-title");
+  await app.type("id:inspector-title", "读完《逐根 K 线解读》的第二章，把形态整理成自己的话");
+  await app.type("id:inspector-notes", "先看单根 K 线的四种形态，再看组合。\n".repeat(24));
+  await app.wait(400);
+  await app.screenshot("mac-inspector-tight-dark.png");
+});
+
 test("phone dark", async () => {
   const app = await openSized(390, 844, DARK);
   if (!app || !(await canDraw(app))) return;

@@ -82,7 +82,20 @@ export function moveFocus(dir: Direction): void {
   reveal(next);
 }
 
-/** Puts the cursor on a card — the one a press opened. */
+/**
+ * Puts the cursor away without moving it anywhere else.
+ *
+ * A press with the pointer is not the keyboard: a card clicked and then closed
+ * kept the cursor's pressed-paper fill for good, because opening it from the
+ * board also set the cursor on it. The cursor is the *keyboard's* mark, so a
+ * pointer press takes it away and the next arrow key brings it back — from the
+ * top of 待办, where the keys start when they have no card of their own.
+ */
+export function clearFocus(): void {
+  if (focus() !== null) focus.set(null);
+}
+
+/** Puts the cursor on a card — the one the keyboard opened, or the palette did. */
 export function adopt(id: string): void {
   const cols = columns();
   for (let c = 0; c < cols.length; c++) {

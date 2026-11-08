@@ -18,7 +18,7 @@ import {
 } from "./data";
 import { startBadge } from "./badge";
 import { isFiltering, searchQuery, tagFilter } from "./filters";
-import { adopt, focusId, focusedCard, keepFocus, moveFocus, shiftFocus } from "./focus";
+import { adopt, clearFocus, focusId, focusedCard, keepFocus, moveFocus, shiftFocus } from "./focus";
 import { MIN_WINDOW } from "./geom";
 import { hydrate, startPersist } from "./persist";
 import { phase, start, statusLine } from "./sync";
@@ -222,8 +222,14 @@ function MacShell() {
           width={windowSize().width}
           selectedId={selectedId()}
           focusId={focusId()}
+          // A press on a card opens it and takes the keyboard's cursor away: the
+          // card is what the pointer chose, and a cursor left behind on it kept
+          // its pressed-paper fill after the panel closed, which read as a card
+          // stuck selected. The keyboard's Enter sets the panel's card without
+          // coming through here, so walking the board with the keys still leaves
+          // the cursor where it was after Escape.
           onSelect={(id) => {
-            if (id) adopt(id);
+            clearFocus();
             selectedId.set(id);
           }}
           onAdd={(status) => createIn(status)}
@@ -368,6 +374,12 @@ export function App() {
 
   return (
     <View
+      // A press anywhere the app is not a card — the air between two columns,
+      // the band above the board — puts the keyboard's cursor away, because the
+      // user is pointing rather than walking. It is on the sheet rather than on
+      // the board so it also covers the header, and a press that lands on a card
+      // or a button stops there and never reaches it.
+      onPress={clearFocus}
       style={{
         flex: 1,
         backgroundColor: theme().ground,

@@ -14,9 +14,10 @@ test("dragging a card moves it to the doing column", async () => {
   expect(app.shows("id:col-todo >> id:card-c3")).toBe(true);
   expect(app.shows("id:col-doing >> id:card-c3")).toBe(false);
 
-  // Drag it one column to the right. The drag reads the grip, not the card, so
-  // a press on the card body stays a press that opens the inspector.
-  await app.drag("id:grip-c3", { x: 300, y: 40 });
+  // Drag it one column to the right. The whole card is the handle, so the drag
+  // starts on its body; a press that does not move is still a press that opens
+  // the inspector, which the test below holds.
+  await app.drag("id:card-c3", { x: 300, y: 40 });
 
   expect(app.shows("id:col-doing >> id:card-c3")).toBe(true);
   expect(app.shows("id:col-todo >> id:card-c3")).toBe(false);
@@ -26,20 +27,21 @@ test("dragging back returns the card", async () => {
   const { app, desktop } = await openApp();
   if (!desktop) return;
 
-  await app.drag("id:grip-c4", { x: -300, y: 20 });
+  await app.drag("id:card-c4", { x: -300, y: 20 });
   expect(app.shows("id:col-todo >> id:card-c4")).toBe(true);
   expect(app.shows("id:col-doing >> id:card-c4")).toBe(false);
 });
 
 /**
- * The whole card is a handle now, and a press is still a press.
+ * The whole card is the handle, and a press is still a press.
  *
- * Dragging used to start only on the 18-point grip, which is a small target for
- * the board's most-used gesture. The card takes the gesture once the pointer has
+ * Dragging used to start only on an 18-point grip in the card's corner, which is
+ * a small target for the board's most-used gesture and a strip the title could
+ * not use. The grip is gone: the card takes the gesture once the pointer has
  * moved five points, so a click that does not move is still the click that opens
- * the card; the grip keeps its own pan and activates sooner.
+ * the card.
  */
-test("a card drags from its body, not only from its grip", async () => {
+test("a card drags from its body", async () => {
   const { app, desktop } = await openApp();
   if (!desktop) return;
 

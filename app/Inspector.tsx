@@ -1,8 +1,9 @@
-import { Scroll, Text, View, windowSize, type JSX } from "nsh";
+import { Text, View, signal, windowSize } from "nsh";
 import { Dialog, Input } from "nsh/base";
 import { COLUMNS, cards, patchCard, removeWithUndo, type Card, type Status } from "./data";
 import { DueEditor, IconButton, NoteLinks, TagPicker, alpha } from "./ui";
 import { charsPerLine, fieldHeight } from "./text";
+import { noteShare, panelSize } from "./panel";
 import { theme, onAccentWash, TYPE } from "./theme";
 
 const BLANK = (id: string): Card => ({
@@ -14,40 +15,18 @@ const BLANK = (id: string): Card => ({
   updatedAt: 0,
 });
 
-/** Styles read the theme where they are used, so a change of appearance repaints
- *  them without re-creating the tree. */
-function Field(props: { label: string; children: JSX.Element }) {
-  return (
-    <View style={{ gap: 8 }}>
-      <Text style={{ fontSize: 11, fontWeight: "600", letterSpacing: 0.2, color: theme().textTertiary }}>
-        {props.label}
-      </Text>
-      {props.children}
-    </View>
-  );
-}
-
-function QuickAction(props: { label: string; onPress: () => void; danger?: boolean }) {
-  return (
-    <View
-      onPress={props.onPress}
-      role="button"
-      accessibilityLabel={props.label}
-      hoverStyle={{ backgroundColor: theme().chip }}
-      activeStyle={{ opacity: 0.6 }}
-      style={{
-        paddingHorizontal: 9,
-        paddingVertical: 5,
-        borderRadius: 6,
-        backgroundColor: theme().chip,
-      }}
-    >
-      <Text style={{ fontSize: 11.5, fontWeight: "500", color: props.danger ? theme().danger : theme().textSecondary }}>
-        {props.label}
-      </Text>
-    </View>
-  );
-}
+/**
+ * The room the note has, measured outside the component.
+ *
+ * `Input` has no height of its own, and the note is the one field that should
+ * take whatever the panel has left — so the box around it is `flex: 1` and the
+ * height that box was given is read back with `onLayout`. The signal is read in
+ * the field's *style*, the one place this engine tracks it: a value read in the
+ * component body would never update. Until the first layout reports a number the
+ * field falls back to a share of the panel, so it is never a zero-height stripe
+ * that jumps once the window settles.
+ */
+const noteBox = signal(0);
 
 /**
  * The card, opened — a card of its own, floating at the middle of the window.
@@ -56,6 +35,13 @@ function QuickAction(props: { label: string; onPress: () => void; danger?: boole
  * time a card was opened: reading one card moved the four columns the user was
  * aiming at. A panel over the board leaves the board exactly where it was, and
  * closing it puts the pointer back on the card it came from.
+ *
+ * The note is the subject of the panel. Everything else — the status, the tags,
+ * the deadline — is one line of controls above it, with no captions and no
+ * rule between the groups: a card is written in prose, not filled in as a form,
+ * and the old panel spent most of its height on labels for three rows of chips.
+ * The panel no longer scrolls anywhere: the note's own field scrolls its text
+ * (a native one does), so there is never a scroll inside a scroll.
  *
  * It reads the card by id rather than taking it as a value, so editing text
  * updates only what shows it: passing the card itself would re-create this
@@ -69,15 +55,13 @@ export function Inspector(props: {
   const id = () => props.id ?? "";
   const card = () => cards().find((c) => c.id === id()) ?? BLANK(id());
   const open = () => props.id !== null;
-  // A height, not a ceiling: the scroll inside needs one it can take the rest
-  // of, and a popup sized by its content gives it nothing to fill.
-  const height = () => Math.max(320, Math.min(600, windowSize().height - 140));
-  // The panel is 440 wide, or the window minus 80 on a small window. A field
-  // inside it measures its own lines against that width minus the 18px padding
-  // on each side — the number `charsPerLine` needs to say how many characters
-  // fit, so a title is never a stub of two words and a note is never cut off.
-  const width = () => Math.min(440, Math.max(300, windowSize().width - 80));
+  // A bigger panel than the first one: the note is what a card is read in, and
+  // 440 × 600 minus a caption per field left it about a hundred points tall.
+  // 560 × 720 at most, and always 80 points inside the window it floats in.
+  const height = () => panelSize(windowSize()).height;
+  const width = () => panelSize(windowSize()).width;
   const innerWidth = () => width() - 36;
+  const noteHeight = () => (noteBox() > 0 ? noteBox() : noteShare(height()));
   return (
     <Dialog
       testID="inspector"
@@ -98,14 +82,18 @@ export function Inspector(props: {
       }}
     >
       {/* The platform's title bar is above this panel, so its own strip is a
-          plain header: 卡片 at tertiary ink, the close button on the same line. */}
+          plain header: 卡片 at tertiary ink, then the two things that end a
+          card's life — filed, or deleted — and the close button, all on the same
+          line. The destructive pair used to sit under a rule at the panel's
+          foot, where it cost the note a line of height for two presses. */}
       <View
         style={{
           flexDirection: "row",
           alignItems: "center",
+          gap: 2,
           paddingLeft: 18,
-          paddingRight: 12,
-          paddingTop: 10,
+          paddingRight: 10,
+          paddingTop: 9,
           paddingBottom: 8,
           borderBottomWidth: 1,
           borderBottomColor: theme().divider,
@@ -113,14 +101,29 @@ export function Inspector(props: {
       >
         <Text style={{ fontSize: 12, fontWeight: "500", color: theme().textTertiary }}>卡片</Text>
         <View style={{ flex: 1 }} />
+        <IconButton
+          name="archive"
+          tint={theme().textSecondary}
+          size={26}
+          label="归档卡片"
+          onPress={() => props.onSelectStatus("archive")}
+        />
+        {/* No alert in front of a delete: the card is kept as a tombstone, so
+            the same press offers 撤销 at the foot of the window instead. */}
+        <IconButton
+          name="trash"
+          tint={theme().danger}
+          size={26}
+          label="删除卡片"
+          onPress={() => {
+            removeWithUndo(card().id);
+            props.onClose();
+          }}
+        />
         <IconButton name="close" tint={theme().textSecondary} size={26} label="关闭" onPress={props.onClose} />
       </View>
 
-      <Scroll
-        scrollbar={false}
-        style={{ flex: 1 }}
-        contentStyle={{ padding: 18, paddingTop: 16, paddingBottom: 24, gap: 20 }}
-      >
+      <View style={{ flex: 1, padding: 18, paddingTop: 14, gap: 12 }}>
         <Input
           testID="inspector-title"
           multiline
@@ -131,105 +134,102 @@ export function Inspector(props: {
             ...TYPE.inspectorTitle,
             color: theme().text,
             placeholderColor: theme().textTertiary,
-            // Four lines of title, then the panel's scroll takes the rest: a
-            // title is read at a glance, and one that pushes the tags and the
-            // deadline off the panel has stopped being a title.
+            // Three lines of title, then it stops: a note is the prose of a
+            // card, and a title that pushes the note off the panel has stopped
+            // being a title.
             height: fieldHeight(
               card().title,
               TYPE.inspectorTitle.lineHeight,
-              4,
+              3,
               charsPerLine(innerWidth(), TYPE.inspectorTitle.fontSize),
             ),
             padding: 0,
           }}
         />
 
-        <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
-          {COLUMNS.map((s) => (
-            <View
-              onPress={() => props.onSelectStatus(s.id)}
-              role="button"
-              accessibilityLabel={`移到${s.label}`}
-              activeStyle={{ opacity: 0.7 }}
-              style={{
-                paddingHorizontal: 10,
-                paddingVertical: 5,
-                borderRadius: 7,
-                backgroundColor:
-                  card().status === s.id
-                    ? alpha(theme().accent, theme().dark ? 0.24 : 0.11)
-                    : theme().chip,
-              }}
-            >
-              <Text
+        {/* The meta strip: three lines, no captions. A caption above every group
+            was three lines of the panel spent saying what the chips say. */}
+        <View testID="inspector-meta" style={{ gap: 8 }}>
+          <View style={{ flexDirection: "row", gap: 6 }}>
+            {COLUMNS.map((s) => (
+              <View
+                onPress={() => props.onSelectStatus(s.id)}
+                role="button"
+                accessibilityLabel={`移到${s.label}`}
+                activeStyle={{ opacity: 0.7 }}
                 style={{
-                  fontSize: 11.5,
-                  fontWeight: "600",
-                  // On the accent wash the plain accent is 4.55:1 in light and
-                  // 3.83:1 in dark; `onAccentWash` clears both.
-                  color: card().status === s.id ? onAccentWash() : theme().textSecondary,
+                  height: 25,
+                  paddingHorizontal: 10,
+                  borderRadius: 7,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor:
+                    card().status === s.id
+                      ? alpha(theme().accent, theme().dark ? 0.24 : 0.11)
+                      : theme().chip,
                 }}
               >
-                {s.label}
-              </Text>
-            </View>
-          ))}
-        </View>
+                <Text
+                  style={{
+                    fontSize: 11.5,
+                    fontWeight: "600",
+                    // On the accent wash the plain accent is 4.55:1 in light and
+                    // 3.83:1 in dark; `onAccentWash` clears both.
+                    color: card().status === s.id ? onAccentWash() : theme().textSecondary,
+                  }}
+                >
+                  {s.label}
+                </Text>
+              </View>
+            ))}
+          </View>
 
-        <View style={{ height: 1, backgroundColor: theme().hairlineSoft }} />
+          <TagPicker selected={card().tags} onChange={(ids) => patchCard(card().id, { tags: ids })} />
 
-        <Field label="备注">
-          <Input
-            testID="inspector-notes"
-            multiline
-            value={card().notes}
-            placeholder="补充细节、链接、下一步…"
-            onChange={({ value }) => patchCard(card().id, { notes: value })}
-            style={{
-              ...TYPE.body,
-              color: theme().text,
-              placeholderColor: theme().textTertiary,
-              // Twelve lines is a note, not a document; past that the panel
-              // scrolls under the field rather than the field growing without
-              // end. The links under it are rows, not part of the text.
-              height: fieldHeight(card().notes, TYPE.body.lineHeight, 12, charsPerLine(innerWidth(), TYPE.body.fontSize)),
-              padding: 0,
-            }}
-          />
-          <NoteLinks text={card().notes} />
-        </Field>
-
-        <Field label="标签">
-          <TagPicker
-            selected={card().tags}
-            onChange={(ids) => patchCard(card().id, { tags: ids })}
-          />
-        </Field>
-
-        <Field label="截止">
           <DueEditor
+            compact
             due={card().due}
             settled={card().status === "done" || card().status === "archive"}
             onChange={(iso) => patchCard(card().id, { due: iso })}
           />
-        </Field>
-
-        <View style={{ height: 1, backgroundColor: theme().hairlineSoft }} />
-
-        <View style={{ flexDirection: "row", gap: 8 }}>
-          <QuickAction label="移到归档" onPress={() => props.onSelectStatus("archive")} />
-          {/* No alert in front of a delete: the card is kept as a tombstone, so
-              the same press offers 撤销 at the foot of the window instead. */}
-          <QuickAction
-            label="删除卡片"
-            danger
-            onPress={() => {
-              removeWithUndo(card().id);
-              props.onClose();
-            }}
-          />
         </View>
-      </Scroll>
+
+        {/* The note, and the rest of the panel's height. The box around the
+            field is what `flex: 1` sizes and `onLayout` reports; the field takes
+            that height, and a note longer than it scrolls its own text. */}
+        <View
+          testID="inspector-note-area"
+          style={{
+            flex: 1,
+            gap: 6,
+            paddingTop: 10,
+            borderTopWidth: 1,
+            borderTopColor: theme().hairlineSoft,
+          }}
+        >
+          <View style={{ flex: 1 }} onLayout={(e) => noteBox.set(Math.round(e.bounds.size.height))}>
+            <Input
+              testID="inspector-notes"
+              multiline
+              // The field scrolls its own text, and the bar is chrome the app did
+              // not draw: the board and the phone's pages hide theirs for the
+              // same reason. A page of paper has no scrollbar down its side.
+              scrollbar={false}
+              value={card().notes}
+              placeholder="补充细节、链接、下一步…"
+              onChange={({ value }) => patchCard(card().id, { notes: value })}
+              style={{
+                ...TYPE.body,
+                color: theme().text,
+                placeholderColor: theme().textTertiary,
+                height: noteHeight(),
+                padding: 0,
+              }}
+            />
+          </View>
+          <NoteLinks text={card().notes} />
+        </View>
+      </View>
     </Dialog>
   );
 }

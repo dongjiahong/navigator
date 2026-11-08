@@ -46,7 +46,7 @@ type IconName =
   | "chevron"
   | "archive"
   | "more"
-  | "grip"
+  | "trash"
   | "inbox"
   | "link";
 
@@ -59,7 +59,10 @@ const PATHS: Record<IconName, string[]> = {
   chevron: ["M9.5 5.5l6.5 6.5-6.5 6.5"],
   archive: ["M3.5 7.5h17v4h-17z", "M5.5 11.5v8h13v-8", "M9.5 15h5"],
   more: ["M6 12h.01", "M12 12h.01", "M18 12h.01"],
-  grip: ["M9.5 7h.01", "M14.5 7h.01", "M9.5 12h.01", "M14.5 12h.01", "M9.5 17h.01", "M14.5 17h.01"],
+  // A bin: a lid, the handle over it, a body that narrows, and two ribs. The
+  // destructive press of the panel's own strip, so it is drawn at the same
+  // weight as the arrow and the cross beside it rather than filled.
+  trash: ["M4.5 7.5h15", "M9.5 7.5V4.8h5v2.7", "M7 7.5l.9 12h8.2l.9-12", "M10.5 11v5.6", "M13.5 11v5.6"],
   inbox: ["M3.5 13.5h4l1.5 3h6l1.5-3h4", "M3.5 13.5l2.5-8h12l2.5 8v5h-17z"],
   link: ["M10 13.5a4.5 4.5 0 006.4.4l2.6-2.6a4.5 4.5 0 00-6.4-6.4l-1.4 1.4", "M14 10.5a4.5 4.5 0 00-6.4-.4l-2.6 2.6a4.5 4.5 0 006.4 6.4l1.4-1.4"],
 };
@@ -517,6 +520,15 @@ export function DueEditor(props: {
   due: string | undefined;
   size?: "mac" | "phone";
   settled?: boolean;
+  /**
+   * The panel's meta strip: one line, no caption, no pill standing above the
+   * controls. The due *is* the button that opens the month — it carries the tone
+   * (amber today, red late, plain ink for later) and the way to any other day —
+   * and the three shortcuts, the hour and 清除 follow it on the same line. It
+   * wraps only in a panel too narrow to hold the line, which is a 300-point
+   * window and not a Mac.
+   */
+  compact?: boolean;
   onChange: (iso: string | undefined) => void;
 }) {
   const tree = computed(() => {
@@ -524,6 +536,113 @@ export function DueEditor(props: {
     const phone = props.size === "phone";
     const due = props.due;
     const time = due && due.length >= 16 ? due.slice(11, 16) : "18:00";
+    if (props.compact) {
+      // The due, read the way the board reads it: today is amber, late is red,
+      // anything later is tertiary ink, and a finished card's time is history
+      // and takes no tone at all.
+      const label = due ? dueLabel(due) : null;
+      const text = label ? (props.settled ? label.text.replace("已逾期 · ", "") : label.text) : "";
+      const tone = props.settled ? "normal" : (label?.tone ?? "normal");
+      const toneColor = tone === "late" ? t.danger : tone === "soon" ? t.warn : t.textTertiary;
+      return (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <View
+            testID="due-calendar"
+            onPress={() => openDueCalendar(due, props.onChange)}
+            role="button"
+            accessibilityLabel={due ? `截止日期 ${dayLabel(due)}` : "选择截止日期"}
+            activeStyle={{ opacity: 0.65 }}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 5,
+              height: 24,
+              paddingHorizontal: 8,
+              borderRadius: 5,
+              backgroundColor: due
+                ? tone === "late"
+                  ? t.dangerSoft
+                  : tone === "soon"
+                    ? t.warnSoft
+                    : t.chip
+                : t.chip,
+            }}
+          >
+            <Icon name="calendar" size={11.5} tint={due ? toneColor : t.textSecondary} width={1.8} />
+            <Text
+              style={{
+                fontSize: 12,
+                fontWeight: "500",
+                color: due ? toneColor : t.textSecondary,
+                fontVariant: ["tabular-nums"],
+              }}
+            >
+              {due ? text : "选择日期"}
+            </Text>
+          </View>
+          {[
+            { label: "今天", offset: 0, hour: 18 },
+            { label: "明天", offset: 1, hour: 9 },
+            { label: "下周", offset: 7, hour: 9 },
+          ].map((q) => {
+            const on = !!due && due.slice(0, 10) === isoDay(q.offset) && !props.settled;
+            return (
+              <View
+                testID={`due-${q.offset}`}
+                onPress={() => props.onChange(withDueDay(due, q.offset, q.hour))}
+                role="button"
+                accessibilityLabel={`截止 ${q.label}`}
+                accessibilityState={{ selected: on }}
+                activeStyle={{ opacity: 0.6 }}
+                style={{
+                  height: 24,
+                  paddingHorizontal: 8,
+                  borderRadius: 6,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: on ? alpha(t.accent, t.dark ? 0.22 : 0.11) : t.chip,
+                }}
+              >
+                <Text style={{ fontSize: 11.5, fontWeight: "500", color: on ? onAccentWash() : t.textSecondary }}>
+                  {q.label}
+                </Text>
+              </View>
+            );
+          })}
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              height: 24,
+              paddingHorizontal: 7,
+              borderRadius: 6,
+              backgroundColor: t.chip,
+            }}
+          >
+            <TimeField
+              testID="due-time"
+              value={time}
+              onChange={({ value }) => props.onChange(withDueTime(due, value))}
+              accessibilityLabel="截止时间"
+              segmentStyle={{ fontSize: 12, fontWeight: "500", color: t.text, fontVariant: ["tabular-nums"] }}
+              separatorStyle={{ fontSize: 12, fontWeight: "500", color: t.textSecondary }}
+            />
+          </View>
+          {due ? (
+            <View
+              testID="due-clear"
+              onPress={() => props.onChange(undefined)}
+              role="button"
+              accessibilityLabel="清除截止时间"
+              activeStyle={{ opacity: 0.6 }}
+              style={{ height: 24, paddingHorizontal: 5, justifyContent: "center" }}
+            >
+              <Text style={{ fontSize: 11.5, fontWeight: "500", color: t.danger }}>清除</Text>
+            </View>
+          ) : null}
+        </View>
+      );
+    }
     return (
       <View style={{ gap: 9, alignItems: "flex-start" }}>
         {due ? (
