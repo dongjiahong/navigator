@@ -19,7 +19,9 @@ import {
   dismissUndo,
   patchTag,
   removeCard,
+  removeSamples,
   removeTag,
+  sampleCardsLeft,
   takeUndo,
   undoable,
   tagOf,
@@ -48,7 +50,9 @@ type IconName =
   | "more"
   | "grip"
   | "inbox"
-  | "link";
+  | "link"
+  | "search"
+  | "filter";
 
 const PATHS: Record<IconName, string[]> = {
   plus: ["M12 5.5v13", "M5.5 12h13"],
@@ -62,6 +66,10 @@ const PATHS: Record<IconName, string[]> = {
   grip: ["M9.5 7h.01", "M14.5 7h.01", "M9.5 12h.01", "M14.5 12h.01", "M9.5 17h.01", "M14.5 17h.01"],
   inbox: ["M3.5 13.5h4l1.5 3h6l1.5-3h4", "M3.5 13.5l2.5-8h12l2.5 8v5h-17z"],
   link: ["M10 13.5a4.5 4.5 0 006.4.4l2.6-2.6a4.5 4.5 0 00-6.4-6.4l-1.4 1.4", "M14 10.5a4.5 4.5 0 00-6.4-.4l-2.6 2.6a4.5 4.5 0 006.4 6.4l1.4-1.4"],
+  // A lens and its handle, drawn on the same 24-unit grid as the rest.
+  search: ["M11 4.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13z", "M15.9 15.9l4.1 4.1"],
+  // Three rules narrowing downwards: the board is being narrowed, not sorted.
+  filter: ["M4 6.5h16", "M7 12h10", "M10.5 17.5h3"],
 };
 
 /**
@@ -269,11 +277,13 @@ export function IconButton(props: {
   onPress: () => void;
   label: string;
   background?: string;
+  testID?: string;
 }) {
   const tree = computed(() => {
     const size = props.size ?? 28;
     return (
       <View
+        testID={props.testID}
         onPress={props.onPress}
         role="button"
         accessibilityLabel={props.label}
@@ -359,11 +369,15 @@ export function TagPicker(props: {
  * an input's placeholder has no colour of its own, so without this it falls
  * back to black and disappears on the dark sheet.
  */
-export function SearchField(props: { size?: "mac" | "phone"; width: number }) {
+export function SearchField(props: { size?: "mac" | "phone"; width: number; autoFocus?: boolean }) {
   const phone = props.size === "phone";
   return (
     <Input
       testID={phone ? "phone-search" : "board-search"}
+      // Only when asked: the field is on the board from the start on the Mac,
+      // and a field that takes the keyboard as the window opens would put every
+      // keystroke meant for the card in the search box.
+      autoFocus={props.autoFocus ?? false}
       ref={(r) => {
         searchInput = r;
       }}
@@ -1083,6 +1097,23 @@ export async function clearArchive(): Promise<void> {
   const yes = await confirm("清空归档？", `将删除 ${ids.length} 张卡片。`, "清空");
   if (!yes) return;
   for (const id of ids) removeCard(id);
+}
+
+/**
+ * Clears what is left of the authored sample board, after asking.
+ *
+ * A fresh install starts with fourteen written cards, and a board the user is
+ * making their own should not keep paying for them: this press tombstones the
+ * ones still on the board, through the same merge every delete uses, so the
+ * other device clears them too. The question names the count, because a whole
+ * first board is more than the one card 撤销 can offer back.
+ */
+export async function clearSamples(): Promise<void> {
+  const left = sampleCardsLeft();
+  if (!left.length) return;
+  const yes = await confirm("清除示例数据？", `将删除 ${left.length} 张示例卡片。`, "清除");
+  if (!yes) return;
+  removeSamples();
 }
 
 /**

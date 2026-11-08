@@ -1,8 +1,8 @@
 import { Scroll, Text, View, effect, keymap, signal, windowSize } from "nsh";
 import { Dialog, Input } from "nsh/base";
-import { COLUMNS, boardTags, cards, type Card, type Status, type Tag } from "./data";
+import { COLUMNS, boardTags, cards, sampleCardsLeft, type Card, type Status, type Tag } from "./data";
 import { clearFilters, tagFilter } from "./filters";
-import { Icon, IconButton, clearArchive, managingTags } from "./ui";
+import { Icon, IconButton, clearArchive, clearSamples, managingTags } from "./ui";
 import { hueColor, theme, type Hue } from "./theme";
 
 /**
@@ -17,7 +17,14 @@ import { hueColor, theme, type Hue } from "./theme";
  */
 
 /** What a command does when it is chosen. */
-export type CommandKind = "new" | "open" | "tag" | "unfilter" | "clear-archive" | "tags";
+export type CommandKind =
+  | "new"
+  | "open"
+  | "tag"
+  | "unfilter"
+  | "clear-archive"
+  | "clear-samples"
+  | "tags";
 
 export type Command = {
   /** Stable within one open palette, and the row's test id. */
@@ -95,6 +102,18 @@ export function rankCommands(query: string, all: Card[], tags: Tag[]): Command[]
   };
 
   offer({ id: "new", kind: "new", label: "新建卡片", hint: "待办" }, "新建卡片 新建 卡片 new", 100);
+
+  // The board a fresh install opens on is authored, not the user's: once their
+  // own cards are there, the samples are noise in every column. The verb is
+  // offered only while some of them are still on the board.
+  const samples = sampleCardsLeft(all).length;
+  if (samples > 0) {
+    offer(
+      { id: "clear-samples", kind: "clear-samples", label: "清除示例数据", hint: `${samples} 张` },
+      "清除示例数据 示例 样例 演示 sample",
+      95,
+    );
+  }
 
   const archived = all.filter((c) => !c.deleted && c.status === "archive").length;
   if (archived > 0) {
@@ -214,6 +233,9 @@ export function CommandPalette(props: { onNew: () => void; onOpen: (id: string) 
         break;
       case "clear-archive":
         void clearArchive();
+        break;
+      case "clear-samples":
+        void clearSamples();
         break;
       case "tags":
         managingTags.set(true);
@@ -402,12 +424,14 @@ function selectedId(): string | null {
 }
 
 /** The glyph a verb carries, from the board's own icon set. */
-function commandGlyph(kind: CommandKind): "plus" | "archive" | "tag" | "inbox" | "chevron" {
+function commandGlyph(kind: CommandKind): "plus" | "archive" | "tag" | "inbox" | "chevron" | "close" {
   switch (kind) {
     case "new":
       return "plus";
     case "clear-archive":
       return "archive";
+    case "clear-samples":
+      return "close";
     case "tags":
     case "tag":
       return "tag";

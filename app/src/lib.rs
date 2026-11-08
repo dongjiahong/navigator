@@ -75,6 +75,8 @@ static INBOX: Mutex<Option<String>> = Mutex::new(None);
 static SYNCED_AT: AtomicU64 = AtomicU64::new(0);
 /// Whether the last exchange with a known Mac failed.
 static UNREACHABLE: Mutex<bool> = Mutex::new(false);
+/// Bumped when the app wants the exchange thread to look for the Mac again now.
+static NUDGE: AtomicU64 = AtomicU64::new(0);
 
 fn parse_cards(text: &str) -> Result<Vec<Value>, String> {
     let value: Value = serde_json::from_str(text).map_err(|e| format!("bad JSON: {e}"))?;
@@ -282,9 +284,30 @@ fn post_state(base: &str, body: &str) -> Result<String, String> {
     Ok(body.to_owned())
 }
 
+/// How long the phone waits before probing again, after `missed` probes in a row
+/// found no Mac.
+///
+/// Three seconds while someone is probably in the room — the Mac may be starting
+/// up, or the phone may have just joined the network — then doubling to half a
+/// minute. Away from home the phone sits on a network with no Mac on it at all,
+/// and a probe every three seconds for an afternoon is a radio that never sleeps.
+fn probe_backoff(missed: u32) -> Duration {
+    const SECONDS: [u64; 5] = [3, 6, 12, 24, 30];
+    Duration::from_secs(SECONDS[(missed as usize).min(SECONDS.len() - 1)])
+}
+
 /// The phone's side: find the Mac, exchange boards, keep the last answer.
 fn exchange_loop() {
+    // How long the last run of failed probes has been, and which nudge was the
+    // last one answered: a nudge is the app saying "look now".
+    let mut missed = 0_u32;
+    let mut seen_nudge = NUDGE.load(Ordering::Relaxed);
     loop {
+        let nudge = NUDGE.load(Ordering::Relaxed);
+        if nudge != seen_nudge {
+            seen_nudge = nudge;
+            missed = 0;
+        }
         let peer = {
             let known = PEER.lock().unwrap().clone();
             known.or_else(|| {
@@ -296,9 +319,14 @@ fn exchange_loop() {
             })
         };
         let Some(peer) = peer else {
-            thread::sleep(Duration::from_secs(3));
+            // Nothing answered: wait longer next time, unless the app fills the
+            // wait with a nudge.
+            wait_for_nudge(probe_backoff(missed), &mut seen_nudge);
+            missed = missed.saturating_add(1);
             continue;
         };
+        // There is a Mac: the next probe is three seconds away again.
+        missed = 0;
         // Taking the body, not copying it: a body the Mac answered is done with,
         // and re-sending it would re-send the same changes every 1.5 seconds for
         // as long as the app is open.
@@ -329,6 +357,25 @@ fn exchange_loop() {
             }
         }
         thread::sleep(Duration::from_millis(1500));
+    }
+}
+
+/// Sleeps for `wait`, unless the app nudges the exchange thread first.
+///
+/// In slices rather than one long sleep: a nudge means the phone is back in
+/// front of its owner, and waiting out the rest of a thirty-second backoff would
+/// make the wake-up late for nothing. Thirty slices is no cost at all.
+fn wait_for_nudge(wait: Duration, seen: &mut u64) {
+    const SLICE: Duration = Duration::from_millis(250);
+    let mut left = wait;
+    while !left.is_zero() {
+        thread::sleep(SLICE.min(left));
+        left = left.saturating_sub(SLICE);
+        let nudge = NUDGE.load(Ordering::Relaxed);
+        if nudge != *seen {
+            *seen = nudge;
+            return;
+        }
     }
 }
 
@@ -629,6 +676,19 @@ impl Sync {
         let address = socket_address(&address);
         *PEER.lock().unwrap() = Some(address);
         *UNREACHABLE.lock().unwrap() = false;
+        // An address is as good as a sighting: probe at it now, and from the
+        // start of the backoff rather than from wherever it had grown to.
+        NUDGE.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Looks for the Mac again now, and at the start of the backoff.
+    ///
+    /// The app calls it when it comes back to the front: the phone has been in a
+    /// pocket, walking out of one network and into another, while the thread
+    /// waited longer and longer for a Mac that was not on the last one. Nothing
+    /// runs where there is no exchange thread, so it is harmless everywhere else.
+    pub fn nudge() {
+        NUDGE.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -1145,6 +1205,31 @@ mod tests {
         assert_eq!(badge_label(99.0), Some("99".to_owned()));
         // Two digits fit an icon's corner; the third does not.
         assert_eq!(badge_label(100.0), Some("99+".to_owned()));
+    }
+
+    #[test]
+    fn a_probe_backs_off_but_never_past_half_a_minute() {
+        let waits: Vec<u64> = (0..8).map(|missed| probe_backoff(missed).as_secs()).collect();
+        assert_eq!(waits, vec![3, 6, 12, 24, 30, 30, 30, 30]);
+        // A phone that has been away for days still probes, and never overflows
+        // into a wait that outlasts the app.
+        assert_eq!(probe_backoff(u32::MAX).as_secs(), 30);
+    }
+
+    #[test]
+    fn a_nudge_cuts_the_wait_short() {
+        let mut seen = NUDGE.load(Ordering::Relaxed);
+        Sync::nudge();
+        let at = Instant::now();
+        wait_for_nudge(Duration::from_secs(5), &mut seen);
+        assert!(
+            at.elapsed() < Duration::from_secs(2),
+            "a nudge must end the wait, not lengthen it"
+        );
+        // And with nobody nudging, the whole wait is waited.
+        let at = Instant::now();
+        wait_for_nudge(Duration::from_millis(400), &mut seen);
+        assert!(at.elapsed() >= Duration::from_millis(400));
     }
 
     #[test]

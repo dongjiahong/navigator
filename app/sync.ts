@@ -259,6 +259,37 @@ export async function connectTo(address: string): Promise<void> {
   detail.set("");
 }
 
+/**
+ * Exchanges with the Mac now, instead of on the next tick: what the phone's
+ * pull-to-refresh asks for.
+ *
+ * It is the ordinary tick, run early — the idle wait is the only thing the
+ * timer adds, and a pull is the user saying they are not waiting. Nothing else
+ * changes hands: the same rows, the same stamp, the same merge.
+ */
+export function syncNow(): void {
+  if (!timer) return;
+  if (isHost()) {
+    hostTick();
+    return;
+  }
+  // Past the idle gate, so a board with nothing of its own to send still asks.
+  askedAt = 0;
+  tick();
+}
+
+/**
+ * Wakes the discovery loop: the app is in front of the user again.
+ *
+ * A phone that spent the afternoon away came back on another network, where the
+ * Mac it knew is not, and the loop has been backing off — three seconds, six,
+ * twelve — the whole time. Coming back to the app is the moment worth a probe.
+ */
+export function nudgeSync(): void {
+  if (!timer || isHost()) return;
+  Sync.nudge();
+}
+
 /** A one-line status for the header. */
 export function statusLine(): string {
   if (detail() === "同步已关闭") return "未同步";

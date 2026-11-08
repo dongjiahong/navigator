@@ -1,4 +1,4 @@
-import { Text, View, effect, keymap, mount, signal, windowSize } from "nsh";
+import { Text, View, effect, keymap, lifecycle, mount, signal, windowSize } from "nsh";
 import { isAvailable as hasWindow, Window } from "nsh/desktop";
 import { MacBoard } from "./MacBoard";
 import { Inspector } from "./Inspector";
@@ -21,7 +21,7 @@ import { isFiltering, searchQuery, tagFilter } from "./filters";
 import { adopt, focusId, focusedCard, keepFocus, moveFocus, shiftFocus } from "./focus";
 import { MIN_WINDOW } from "./geom";
 import { hydrate, startPersist } from "./persist";
-import { phase, start, statusLine } from "./sync";
+import { nudgeSync, phase, start, statusLine } from "./sync";
 import { startReminders } from "./reminders";
 import { theme, onAccentWash } from "./theme";
 import {
@@ -364,6 +364,14 @@ export function App() {
   // the cursor to the one that took its row. Also an effect, for the same
   // reason: the shell must not re-render on every keystroke for this.
   effect(() => keepFocus());
+
+  // Coming back to the app is a moment worth a probe. A phone that spent the
+  // afternoon away walked out of one network and into another, and the exchange
+  // thread has been backing off the whole time; this is the app saying it is in
+  // front of the user again.
+  effect(() => {
+    if (lifecycle() === "active") nudgeSync();
+  });
 
 
   return (

@@ -139,6 +139,20 @@ export function onAccentFill(): string {
 }
 
 /**
+ * Content drawn on a filled semantic surface that is not the accent: the
+ * phone's swipe bands, green and red.
+ *
+ * The same rule as `onAccentFill()`, for the same reason — light mode's fills
+ * are deep, so their content is white (5.29:1 on `ok`, 5.93:1 on `danger`), and
+ * dark mode's are pale, so theirs is near-black (9.16:1 and 7.75:1). The neutral
+ * band is not here: it is `select`, not a fill, and takes `textSecondary`
+ * (5.40:1 light, 6.29:1 dark).
+ */
+export function onFill(): string {
+  return colorScheme() === "dark" ? "#0D1418" : "#FFFFFF";
+}
+
+/**
  * Type: the platform's own scale. Titles carry no weight to make up for a weak
  * layout — they are regular weight, like a list row in a native app, and the
  * hierarchy comes from size, colour and space.

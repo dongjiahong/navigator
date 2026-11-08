@@ -291,6 +291,34 @@ export function sampleCards(): Card[] {
 export const cards = signal<Card[]>(sampleCards());
 
 /**
+ * The ids the authored board carries.
+ *
+ * Derived from `sampleCards()` rather than listed again, so a sample added or
+ * renamed is recognised without a second place to remember. A card the user
+ * makes can never collide with one: `newId` appends a millisecond stamp and a
+ * random tail, so a user's id is never two characters long.
+ *
+ * This is how "the samples are still on the board" is answered without a field
+ * on `Card`: a flag would mean a column in the file and a rule in the merge for
+ * a fact that only matters once, on a fresh install.
+ */
+const SAMPLE_IDS = new Set(sampleCards().map((c) => c.id));
+
+/** The sample cards still on the board, one per card. */
+export function sampleCardsLeft(all: Card[] = cards()): Card[] {
+  return all.filter((c) => !c.deleted && SAMPLE_IDS.has(c.id));
+}
+
+/**
+ * Removes what is left of the authored board, as tombstones written through
+ * `removeCard` — so the clearing reaches the other device instead of being
+ * pushed back by it on the next merge.
+ */
+export function removeSamples(): void {
+  for (const card of sampleCardsLeft()) removeCard(card.id);
+}
+
+/**
  * A tag is the user's, not the app's: a name and one of the palette's five
  * hues. It carries a stamp and a tombstone like a card does, because tags sync
  * the same way — a tag renamed or removed on one device must not come back from

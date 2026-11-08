@@ -57,6 +57,28 @@ export async function openSized(
 }
 
 /**
+ * Opens the app on the phone's surface, wherever the test is running.
+ *
+ * The phone layout is chosen by the window's width, not by the platform, so a
+ * 390-point window is the phone on a desktop as well — and a real device, which
+ * refuses a size, is the phone already. The phone tests used to be Android-only
+ * for that reason, which meant the headless suite could not see them at all;
+ * this opens the same screen everywhere it can be laid out.
+ *
+ * `titleBand` is true only on a host that draws a real window it sized: such a
+ * window has the platform's own title bar band across the top even with the
+ * chrome hidden, and presses in it belong to the window rather than to the
+ * content. A phone has no such band, and neither does the headless engine, so a
+ * test that presses a control in the phone's title row skips it there — the band
+ * swallows the press, which says nothing about the app.
+ */
+export async function openPhone() {
+  const sized = await openSized(390, 844);
+  if (!sized) return { app: await open("./App.tsx", ISOLATED), titleBand: false };
+  return { app: sized, titleBand: await canDraw(sized) };
+}
+
+/**
  * Whether the app can be drawn at all — the headless engine paints nothing, so
  * `screenshot` rejects there and every host that draws accepts it.
  *
