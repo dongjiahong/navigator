@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <!-- 1. App Icon 圆角背景 (深石板蓝 #243547) -->
+  <rect width="512" height="512" rx="115" fill="#243547" />
+
+  <!-- 2. 底层八角星底纹 (灰蓝 #6A7D8E，完整连续折线) -->
+  <g fill="none" stroke="#6A7D8E" stroke-width="6.5" stroke-linejoin="round" stroke-linecap="round">
+    <polygon points="
+      256,138 273,215 322,190 297,239 
+      374,256 297,273 322,322 273,297 
+      256,374 239,297 190,322 215,273 
+      138,256 215,239 190,190 239,215" />
+  </g>
+
+  <!-- 3. 黄金主罗盘结构 (暖沙金 #DFC39D) -->
+  <g fill="none" stroke="#DFC39D" stroke-linecap="round" stroke-linejoin="round">
+    <!-- 外环与内环 -->
+    <circle cx="256" cy="256" r="164" stroke-width="11" />
+    <circle cx="256" cy="256" r="138" stroke-width="7" />
+
+    <!-- 外环四向刻度尖角 -->
+    <polygon points="256,64 248,92 264,92" fill="#DFC39D" stroke-width="4" />
+    <polygon points="256,448 248,420 264,420" fill="#DFC39D" stroke-width="4" />
+    <polygon points="64,256 92,248 92,264" fill="#DFC39D" stroke-width="4" />
+    <polygon points="448,256 420,248 420,264" fill="#DFC39D" stroke-width="4" />
+
+    <!-- 罗盘主指针 (还原原图：42度倾角、修长空心粗边菱形 + 独立中心圆点) -->
+    <g transform="rotate(42 256 256)">
+      <!-- 指针主体：纯空心粗线条，用背景色 #243547 遮挡底层灰线 -->
+      <polygon points="256,130 282,256 256,382 230,256" fill="#243547" stroke="#DFC39D" stroke-width="12" stroke-linejoin="round" />
+      <!-- 指针正中心独立实心圆点 -->
+      <circle cx="256" cy="256" r="9" fill="#DFC39D" stroke="none" />
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,302 @@
+{
+  "schemaVersion": 2,
+  "name": "Navigator",
+  "slug": "navigator",
+  "kind": "app",
+  "stack": "nsh (Native Shell) — TSX UI over AppKit and Android native views, Rust for the sync service",
+  "surfaces": [
+    {
+      "id": "mac-board",
+      "label": "Mac · 看板",
+      "target": "app/App.tsx",
+      "brief": ".impeccable/surface-brief.md",
+      "mode": "Operate",
+      "viewports": ["1280x820"]
+    },
+    {
+      "id": "phone",
+      "label": "Android · 看板",
+      "target": "app/PhoneHome.tsx",
+      "brief": ".impeccable/surface-brief.md",
+      "mode": "Operate",
+      "viewports": ["390x844"]
+    }
+  ],
+  "narrative": {
+    "northStar": "Paper on the Desk",
+    "thesis": "A board is one sheet of paper, not a grid of boxes. The category default — a grey ground with a white bordered card per task and a tray per column, boxes inside boxes — is refused: columns are separated by air and a hairline rule under each label, and cards are the only raised objects on the surface.",
+    "ownWorld": "Ivory ground, raked with a single diagonal light from the top-left (158deg, #FCFCFA → #F6F7F8 → #EFF1F2 → #E4E7EA). Cards are white paper at radius 10 with one tight two-layer shadow and no border; the inspector is a slightly cooler sheet (#FAFBFC) divided by a hairline, not a panel that floats. Type is the platform scale at regular weight, so hierarchy comes from size and colour, not boldness. Colour does three jobs and only three: a tag dot names what the work belongs to, a due time is tinted only when it is today or overdue, and a finished card turns a green check and drops to tertiary text. The one accent, steel blue, is reserved for the primary action, the drop seam, and the selected column run. Dark is its own scheme, not a filter.",
+    "story": "The visitor reads the board in one pass: what is left, what is moving, what is finished. Each card says what it is and when it is due without opening anything. Opening a card turns the same object into a form and back, with no mode change and no lost keystroke.",
+    "firstViewport": "The window's title bar is the app's own 54px header: system chrome is hidden, the app fills the window to its top edge, and the traffic lights sit in that band beside 看板 at 15px, the sync state as one quiet line, and a single tinted 新建 button. Its left padding adds `titleBar().left` so the title clears the lights. Below it four columns of 246–336px, each led by its label, a tabular count, and a hairline rule. Cards begin directly under that rule with no tray behind them. Pressing a card docks a 300px inspector as a second column of the window: its own 54px top strip, closed by the same rule that closes the board's header, so the close button lands on the 新建 baseline.",
+    "form": "Header band, then a four-column reading plane that scrolls horizontally, then a docked inspector. Signature move: dragging lifts a card off the paper — tilted 1.4°, scaled 1.03, shadowed — and opens a 2px seam at the exact index it will land in; on release the card settles into that seam. On the phone the signature move is its native form: a 44pt check circle that completes a row in one tap, and a paged swipe across the four columns.",
+    "finish": "Every shipping raster was captured on the real platform, light and dark, with the scheme pinned in the test so a dark machine cannot produce dark 'light' evidence."
+  },
+  "rules": [
+    {
+      "name": "The Three Jobs Rule",
+      "statement": "Colour has exactly three jobs: a tag dot names what work belongs to, a due time is tinted only when it is today (amber) or late (red), and a finished card drops to tertiary ink behind a green check. Nothing else may be colourful."
+    },
+    {
+      "name": "The One Accent Rule",
+      "statement": "Steel blue covers roughly 2% of the screen: the primary button, the drop seam, the selected status chip, the FAB. It is never a fill larger than a button."
+    },
+    {
+      "name": "The Regular Title Rule",
+      "statement": "Card titles are 400 weight. Hierarchy comes from size and colour, never from boldness."
+    },
+    {
+      "name": "The Tabular Rule",
+      "statement": "Every number that sits in a column — counts, due times — is set in tabular figures."
+    },
+    {
+      "name": "The Declare-Once Rule",
+      "statement": "A surface carries either a border or a shadow, never both. A zero-blur shadow used as a ring renders as nothing on this engine; selection is a fill plus a hairline instead."
+    },
+    {
+      "name": "The Readable Measure Rule",
+      "statement": "A card never goes below 246px. When the inspector narrows the board, the board scrolls sideways rather than compressing cards: a kanban that truncates every note to two half-lines is not more useful for fitting."
+    },
+    {
+      "name": "The Two Accent Surfaces Rule",
+      "statement": "A label on an accent wash uses the muted accent (the plain one measures 4.30–4.37:1 light, 3.83:1 on the dark chip; the muted twin clears every wash at 5.00–8.28:1). Content on a filled accent surface is white in light (5.47:1) and near-black #0D1418 in dark (7.42:1), because the dark accent is a pale blue where white is 2.50:1. Both live in `onAccentWash()` and `onAccentFill()`, never chosen at a call site."
+    },
+    {
+      "name": "The One Window Rule",
+      "statement": "The app owns the top of its window. Hide the system title bar (`Window.setTitleBar({ style: \"hidden\" })`), keep the platform's window controls, put them on the same 54pt band as the app's own title, inset that title by `titleBar().left` so it clears them, and make the band draggable (`desktop={{ windowDrag: true }}`)."
+    },
+    {
+      "name": "The Two Hairlines Rule",
+      "statement": "The header's rule is `divider`, the app's heaviest line; a column's rule is `hairlineSoft`, one step quieter. Two lines of equal weight bracketing the label strip turn the board into a table."
+    },
+    {
+      "name": "The Find-Don't-Remember Rule",
+      "statement": "An address that only works until the next DHCP lease is not a setting. The phone discovers the Mac on every session by broadcasting on its own subnet and reading the reply's source address; a typed address is the fallback only."
+    },
+    {
+      "name": "The Same-Board Rule",
+      "statement": "Compare boards per card by id and stamp, never as JSON text. The server re-serializes with sorted keys, so a text comparison reports a change on every tick and the resulting cards.set re-renders the board under the user's finger."
+    }
+  ],
+  "tokens": {
+    "colors": {
+      "ground": { "value": "#EFF1F2", "description": "Ivory ground, the bottom stop of the 158deg rake." },
+      "groundTint": { "value": "#F6F7F8", "description": "Second stop of the rake." },
+      "groundDeep": { "value": "#E4E7EA", "description": "Bottom edge, where the light falls off." },
+      "light": { "value": "#FFFFFF", "description": "The card: white paper." },
+      "lightWarm": { "value": "#FCFCFA", "description": "Top-left stop of the rake, where the light lands." },
+      "select": { "value": "#E9EDF0", "description": "Paper pressed into the desk. Selection, not accent." },
+      "selectEdge": { "value": "#CFD6DB", "description": "The 1px rule around the selected card." },
+      "card": { "value": "#FFFFFF" },
+      "cardPressed": { "value": "#F7F9FA" },
+      "panel": { "value": "#FAFBFC", "description": "The inspector, a cooler sheet divided by a hairline." },
+      "hairline": { "value": "rgba(22,30,38,0.075)" },
+      "hairlineSoft": { "value": "rgba(22,30,38,0.055)" },
+      "divider": { "value": "#DDE2E5", "description": "The header rule. The heaviest line in the app." },
+      "text": { "value": "#1A1C1E" },
+      "textSecondary": { "value": "#5A6067" },
+      "textTertiary": { "value": "#666C73" },
+      "accent": { "value": "#2E6DA4", "description": "Steel blue. The only accent." },
+      "accentMuted": { "value": "#245F94" },
+      "accentSoft": { "value": "#E4EDF5" },
+      "danger": { "value": "#B23A32" },
+      "warn": { "value": "#8A5A12", "description": "A due time that is today." },
+      "ok": { "value": "#1F7A55", "description": "The check on a finished card." },
+      "chip": { "value": "rgba(22,30,38,0.045)" }
+    },
+    "colorsDark": {
+      "ground": { "value": "#17191B" },
+      "card": { "value": "#24282B" },
+      "cardHover": { "value": "#2A2F32" },
+      "cardPressed": { "value": "#2F3438" },
+      "panel": { "value": "#1E2123" },
+      "select": { "value": "#2B3136" },
+      "selectEdge": { "value": "#3F474D" },
+      "text": { "value": "#F0F2F4" },
+      "textSecondary": { "value": "#AEB4BA" },
+      "textTertiary": { "value": "#949BA2" },
+      "accent": { "value": "#6FA9DC" },
+      "accentMuted": { "value": "#A9CBEA" },
+      "accentSoft": { "value": "rgba(111,169,220,0.18)" },
+      "danger": { "value": "#FF8377" },
+      "warn": { "value": "#E3AE5E" },
+      "ok": { "value": "#63C99B" },
+      "hairline": { "value": "rgba(255,255,255,0.085)" },
+      "hairlineSoft": { "value": "rgba(255,255,255,0.055)" },
+      "divider": { "value": "rgba(255,255,255,0.10)" },
+      "chip": { "value": "rgba(255,255,255,0.06)" },
+      "scrim": { "value": "rgba(0,0,0,0.55)" },
+      "onFill": { "value": "#0D1418", "description": "Content on a filled accent in dark; white there measured 2.50:1." }
+    },
+    "tags": {
+      "description": "Per-scheme values: one hue cannot clear both grounds. Every pair tested at 4.5:1 or better; the dark set measures 6.06–7.33:1 on the dark card.",
+      "work": { "light": "#2E6DA4", "dark": "#79B4E8" },
+      "personal": { "light": "#1F7A55", "dark": "#63C99B" },
+      "study": { "light": "#5F53A8", "dark": "#A99BEA" },
+      "life": { "light": "#96622A", "dark": "#D9A566" },
+      "urgent": { "light": "#B23A32", "dark": "#FF8A80" }
+    },
+    "typography": {
+      "columnLabel": { "fontSize": "12.5px", "fontWeight": 600, "letterSpacing": "0.3px" },
+      "cardTitle": { "fontSize": "14px", "fontWeight": 400, "lineHeight": "20.5px" },
+      "phoneTitle": { "fontSize": "16.5px", "fontWeight": 400, "lineHeight": "23.5px" },
+      "inspectorTitle": { "fontSize": "19.5px", "fontWeight": 600, "lineHeight": "27px" },
+      "body": { "fontSize": "13px", "fontWeight": 400, "lineHeight": "20.5px" },
+      "meta": { "fontSize": "12px", "fontWeight": 500, "letterSpacing": "0.1px" },
+      "metaPhone": { "fontSize": "12.5px", "fontWeight": 500, "letterSpacing": "0.1px" }
+    },
+    "rounded": {
+      "card": "10px",
+      "panelSheet": "20px",
+      "control": "9px",
+      "duePill": "5px",
+      "pill": "999px"
+    },
+    "spacing": {
+      "pageEdge": "16px",
+      "columnGutter": "30px",
+      "cardPadding": "12px",
+      "cardGap": "7px",
+      "rowPaddingY": "13px",
+      "headerHeight": "54px",
+      "columnHeaderHeight": "38px",
+      "columnMin": "246px",
+      "columnMax": "336px",
+      "inspectorWidth": "300px"
+    },
+    "shadows": {
+      "shadow": {
+        "value": "0 0.5px 1px rgba(22,30,38,0.09), 0 1.5px 3px rgba(22,30,38,0.055)",
+        "description": "A resting card. Tight and short: paper on a desk, not a floating panel. Not visible in the app screenshot path, which does not render unmasked outer shadows — see evidence.provenance."
+      },
+      "shadowLift": {
+        "value": "0 4px 10px rgba(22,30,38,0.13), 0 18px 44px rgba(22,30,38,0.17)",
+        "description": "The card being dragged, and the phone's FAB. Only for something genuinely off the surface. Visible on the real device capture, absent from the in-process rasters."
+      }
+    },
+    "motion": {
+      "dragLift": { "tilt": "1.4deg", "scale": 1.03, "description": "A card picked up off the paper." },
+      "dropSeam": { "width": "2px", "color": "{colors.accent}", "description": "The one place the accent appears as a line: it is what makes 'status is a place' visible." },
+      "sheetRadius": "20px"
+    },
+    "breakpoints": {
+      "wide": { "min": 820, "description": "At or above this width the board is four columns; below it the app becomes the phone's list." }
+    }
+  },
+  "components": [
+    {
+      "name": "Card",
+      "description": "Paper at rest: white, 10px radius, one tight shadow, no border, 12px padding. Title then notes then one meta row of tag dots and a due pill. The drag grip appears on hover. Selection swaps the fill to pressed paper and adds a 1px rule and keeps that fill on hover.",
+      "html": "<div class=\"card\"><div class=\"row\"><span class=\"title\">阅读《逐根 K 线解读》并做笔记</span></div><p class=\"notes\">主要看一些 K 线的形态。</p><div class=\"meta\"><span class=\"tag study\">学习</span><span class=\"due\">明天 21:00</span></div></div>",
+      "css": ".card{background:#fff;border-radius:10px;box-shadow:0 0.5px 1px rgba(22,30,38,.09),0 1.5px 3px rgba(22,30,38,.055);padding:12px;display:flex;flex-direction:column;gap:7px}.title{font-size:14px;font-weight:400;line-height:20.5px;color:#1A1C1E}.notes{font-size:12.5px;line-height:18.5px;color:#5A6067;margin:0;-webkit-line-clamp:2;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical}.meta{display:flex;gap:11px;align-items:center;font-size:12px;font-weight:500}.tag::before{content:'';display:inline-block;width:6px;height:6px;border-radius:3px;margin-right:5px;vertical-align:middle}.tag.study{color:#5F53A8}.tag.study::before{background:#5F53A8}.due{color:#666C73;font-variant-numeric:tabular-nums}"
+    },
+    {
+      "name": "Card · selected",
+      "description": "The card the inspector owns. Pressed paper plus a hairline: never the accent, which belongs to one action on the board.",
+      "html": "<div class=\"card selected\"><span class=\"title\">阅读《逐根 K 线解读》并做笔记</span></div>",
+      "css": ".card.selected{background:#E9EDF0;border:1px solid #CFD6DB}"
+    },
+    {
+      "name": "Column header",
+      "description": "Name at secondary ink, tabular count at tertiary, a plus button on hover, closed by hairlineSoft — one step quieter than the header's divider so the label strip does not read as a table cell.",
+      "html": "<div class=\"colhead\"><span class=\"label\">待办</span><span class=\"count\">7</span><span class=\"grow\"></span><span class=\"plus\">+</span></div>",
+      "css": ".colhead{height:38px;display:flex;align-items:center;gap:7px;padding-left:2px;border-bottom:1px solid rgba(22,30,38,.055);margin-bottom:9px}.label{font-size:12.5px;font-weight:600;letter-spacing:.3px;color:#5A6067}.count{font-size:12px;font-weight:500;color:#666C73;font-variant-numeric:tabular-nums}.grow{flex:1}.plus{color:#666C73;font-size:15px}"
+    },
+    {
+      "name": "Header band",
+      "description": "54px: 看板 at the left, the sync state as one quiet line in the middle, one tinted 新建 button at the right, closed by the app's heaviest rule.",
+      "html": "<header><span class=\"wordmark\">看板</span><span class=\"sync\">等待手机</span><span class=\"grow\"></span><button class=\"new\">＋ 新建</button></header>",
+      "css": "header{height:54px;display:flex;align-items:center;gap:12px;padding:0 16px;border-bottom:1px solid #DDE2E5;background:linear-gradient(158deg,#FCFCFA 0%,#F6F7F8 26%,#EFF1F2 56%,#E4E7EA 100%)}.wordmark{font-size:15px;font-weight:600;color:#1A1C1E}.sync{font-size:11.5px;font-weight:500;color:#666C73}.grow{flex:1}.new{height:27px;padding:0 10px;border:0;border-radius:7px;background:#E4EDF5;color:#2E6DA4;font-size:12px;font-weight:600}"
+    },
+    {
+      "name": "Tag",
+      "description": "A 6px dot and the tag's name in the tag's colour. No chip, no background: a pill behind every tag turns a quiet row into a row of buttons.",
+      "html": "<span class=\"tag\">工作</span>",
+      "css": ".tag{font-size:12px;font-weight:500;color:#2E6DA4}.tag::before{content:'';display:inline-block;width:6px;height:6px;border-radius:3px;background:#2E6DA4;margin-right:5px;vertical-align:middle}"
+    },
+    {
+      "name": "Due time",
+      "description": "Plain tertiary when later than today, amber on its wash when today, red on its wash when late. A finished card drops the 已逾期 prefix: its time is history, not a warning.",
+      "html": "<span class=\"due today\">今天 20:00</span><span class=\"due late\">已逾期 · 今天 18:30</span>",
+      "css": ".due{font-size:12px;font-weight:500;color:#666C73;font-variant-numeric:tabular-nums}.due.today{color:#8A5A12;background:rgba(138,90,18,.14);border-radius:5px;padding:2px 6px}.due.late{color:#B23A32;background:rgba(178,58,50,.11);border-radius:5px;padding:2px 6px}"
+    },
+    {
+      "name": "Phone row",
+      "description": "One sheet per column, rows divided by a hairline inset 47px so it starts where the text does. A 44pt check circle leads, because a thumb completes work faster than it opens it.",
+      "html": "<div class=\"prow\"><span class=\"circle\"></span><div class=\"pbody\"><span class=\"ptitle\">写周报</span><span class=\"pnotes\">把这一周的进展写清楚。</span><div class=\"pmeta\"><span class=\"tag work\">工作</span><span class=\"due today\">今天 20:00</span></div></div></div>",
+      "css": ".prow{display:flex;gap:10px;padding:13px 12px 13px 14px;background:#fff;border-bottom:1px solid rgba(22,30,38,.075)}.circle{width:23px;height:23px;border:1.6px solid rgba(102,108,115,.8);border-radius:11.5px;flex:0 0 auto;margin-top:1px}.pbody{flex:1;display:flex;flex-direction:column;gap:5px}.ptitle{font-size:16.5px;font-weight:400;line-height:23.5px;color:#1A1C1E}.pnotes{font-size:13px;line-height:19px;color:#5A6067;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pmeta{display:flex;gap:11px;align-items:center}"
+    },
+    {
+      "name": "Phone primary button",
+      "description": "48dp of accent when it can fire; the tinted wash with a muted accent label when the title is empty. Accessibility state, not `disabled`, which drops the affordance entirely. Content on the fill is `onAccentFill()`: white in light, near-black in dark.",
+      "html": "<button class=\"primary\">添加</button><button class=\"primary idle\">添加</button>",
+      "css": ".primary{height:48px;width:100%;border:0;border-radius:12px;background:#2E6DA4;color:#fff;font-size:15px;font-weight:600}.primary.idle{background:#E4EDF5;color:#245F94}@media (prefers-color-scheme:dark){.primary{background:#6FA9DC;color:#0D1418}.primary.idle{background:rgba(111,169,220,.18);color:#A9CBEA}}"
+    },
+    {
+      "name": "Inspector",
+      "description": "A 300px sheet at panel fill, docked as a second column of the window rather than an overlay. Its own 54px top strip carries 卡片 at tertiary ink and the close button, closed by the same rule that closes the board's header, so the close sits on the 新建 baseline. Title at 19.5px/600, status chips, notes, tags, due quick actions, then a quiet rule and the destructive pair.",
+      "html": "<aside class=\"inspector\"><div class=\"itop\"><span>卡片</span><span class=\"grow\"></span><button class=\"iclose\">×</button></div><input class=\"ititle\" value=\"阅读《逐根 K 线解读》并做笔记\"><div class=\"chips\"><span class=\"chip on\">待办</span><span class=\"chip\">进行中</span><span class=\"chip\">已完成</span><span class=\"chip\">归档</span></div></aside>",
+      "css": ".inspector{width:300px;height:100%;background:#FAFBFC;border-left:1px solid rgba(22,30,38,.075);display:flex;flex-direction:column}.itop{height:54px;display:flex;align-items:center;padding:0 20px;border-bottom:1px solid #DDE2E5;font-size:12px;font-weight:500;color:#666C73}.grow{flex:1}.iclose{width:26px;height:26px;border:0;background:transparent;color:#5A6067;font-size:15px}.ititle{font-size:19.5px;font-weight:600;line-height:27px;color:#1A1C1E;border:0;background:transparent;width:calc(100% - 36px);margin:16px 18px 0}.chips{display:flex;gap:6px;margin:20px 18px 0}.chip{font-size:11.5px;font-weight:600;padding:5px 10px;border-radius:7px;background:rgba(22,30,38,.045);color:#5A6067}.chip.on{background:rgba(46,109,164,.11);color:#2E6DA4}"
+    },
+    {
+      "name": "Sync status line",
+      "description": "One line of tertiary ink in the header: 等待手机 on the Mac, 已同步 HH:MM / 查找中 / 连不上 Mac，正在重新查找 on the phone. Never a banner, a toast or a progress bar.",
+      "html": "<span class=\"sync\">已同步 19:31</span>",
+      "css": ".sync{font-size:11.5px;font-weight:500;color:#666C73}.sync.error{color:#B23A32}"
+    }
+  ],
+  "evidence": {
+    "light": [
+      ".impeccable/review/desktop.png",
+      ".impeccable/review/desktop-inspector.png",
+      ".impeccable/review/phone.png",
+      ".impeccable/review/phone-detail.png",
+      ".impeccable/review/phone-capture.png"
+    ],
+    "dark": [
+      ".impeccable/review/desktop-dark.png",
+      ".impeccable/review/desktop-inspector-dark.png",
+      ".impeccable/review/phone-dark.png"
+    ],
+    "device": [
+      ".impeccable/review/phone-real.png",
+      ".impeccable/review/phone-real-capture.png",
+      ".impeccable/review/phone-real-detail.png"
+    ],
+    "references": [
+      ".impeccable/review/reference/reminders-reference.jpeg",
+      ".impeccable/review/reference/notes-reference.jpeg"
+    ],
+    "provenance": "All app captures come from `nsh test --target macos` with the color scheme pinned per test, so light evidence cannot silently render dark. The `phone-real*.png` files are `adb exec-out screencap` from the Redmi 25060RK16C (2772×1280) running the release APK: the board in dark scheme with the FAB, the capture sheet with the live Chinese IME and a caret, and the detail sheet. Contrast was then measured on those device pixels, not only on tokens: the FAB glyph reads 7.40:1 (white on the same fill had been 2.50:1) and the idle 添加 label 6.96:1. Two limits of the desktop evidence remain: the app screenshot path does not render unmasked outer shadows, so no desktop raster shows the elevation that exists at runtime (the FAB's shadow is visible on the device), and `app.screenshot()` captures the content view only, so the traffic lights that sit in the app's header on the real window cannot be verified from any file here. A live window capture needs Screen Recording permission this environment does not have."
+  },
+  "accessibility": {
+    "contrast": "35 text/ground pairs plus the accent family measured with a script, all at or above 4.5:1 in both schemes. Lowest pairs: tertiary ink on the ground at 4.68:1, and amber-on-its-wash at 4.86:1. The accent family is tabulated under The Two Accent Surfaces Rule.",
+    "targets": "Every pressable row is at least 44pt on the phone; the sync entry grew its hit area from about 14pt of text to a 159pt block, because a status line alone is too small for a fingertip.",
+    "roles": "Pressables carry `role=\"button\"` and an `accessibilityLabel` in Chinese, so the tree reads correctly to a screen reader and to `uiautomator`."
+  },
+  "open": [
+    {
+      "item": "Persistence",
+      "reason": "The board is in memory: it starts from the sample cards in `app/data.ts` and returns to them when the process exits. Sync is real but both sides forget on quit."
+    },
+    {
+      "item": "Field-level merge",
+      "reason": "Merging is per card. Two devices editing different fields of the same card in the same second means one side's change is overwritten whole, not per field."
+    },
+    {
+      "item": "Authentication",
+      "reason": "Any device on the LAN can read and write the port. That is the price of no accounts and LAN-only, and it is written down rather than hidden."
+    },
+    {
+      "item": "The drag state has no capture",
+      "reason": "The signature move — tilt 1.4°, scale 1.03, `shadowLift`, a 2px accent seam at the landing index — is unreviewed in pixels. `dragAndHold` only runs headless (and on Linux), and a headless engine paints nothing, so no raster of a mid-drag frame exists."
+    },
+    {
+      "item": "The window chrome cannot be pixel-verified",
+      "reason": "`app.screenshot()` captures the content view, and a live `screencapture` returns black without Screen Recording permission. That the traffic lights sit on the app's own header is verified by eye on the running window and by code (`Window.setTitleBar({style:\"hidden\"})` + `titleBar().left`), not by a file in this evidence set."
+    },
+    {
+      "item": "Empty columns and keyboard focus are uncaptured",
+      "reason": "No capture contains an empty column. Keyboard focus and the IME are covered on the device (`phone-real-capture.png` shows the capture sheet with a live Chinese IME and a caret, and the inset holds), but the empty-state copy is only exercised by tests, not shown in a raster."
+    }
+  ]
+}

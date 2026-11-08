@@ -1,0 +1,952 @@
+//! The board's file, and the sync service that lives inside the Mac app.
+//!
+//! The board is a SQLite file (`board.rs`). It is the only copy: the interface
+//! loads it at launch, saves each change a moment later, and merges the phone's
+//! changes into the same rows, so there is nothing to reconcile between a
+//! "stored" board and a "shown" one.
+//!
+//! The service only exists while the app is open: the listener is a thread this
+//! crate starts, so quitting the app closes the port and the phone's next sync
+//! fails instead of talking to a stale copy.
+//!
+//! Two rules keep the merge honest:
+//!
+//! - **Last write wins, per card, by `updatedAt`.** A phone that was in a
+//!   tunnel for an hour cannot overwrite an edit the Mac made since.
+//! - **Deletes are tombstones.** A card removed on the Mac comes back as
+//!   `deleted: true` with a newer `updatedAt`, so merging cannot resurrect it.
+//!
+//! A device sends only what changed since the last exchange, and gets back only
+//! what it is missing: `POST /state` carries `{ cards, tags, since }` and
+//! answers with the rows stamped at or after `since`. A phone that has been
+//! alone for a day catches up in one round trip, and a keystroke on a board of a
+//! thousand cards is still a few hundred bytes on the wire.
+//!
+//! The phone finds the Mac the way LocalSend finds its peers: it broadcasts a
+//! probe on the network, and whoever serves the board answers with a unicast
+//! datagram. The address is read off that reply, so a Mac that moved to a new
+//! DHCP lease is found again on the next tick without anyone typing an IP.
+//!
+//! The phone also talks to the Mac on a plain socket rather than through the
+//! platform's HTTP client, because Android blocks cleartext HTTP to a LAN
+//! address by policy, and this traffic never leaves the LAN.
+//!
+//! The crate also owns the deadline reminders. nsh has no notification API, so
+//! the Mac's go through `UNUserNotificationCenter` here, where a due date
+//! becomes a real system notification that plays the system's sound and that
+//! macOS delivers even after the app quits.
+
+use std::io::{Read, Write};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::sync::{
+    Mutex, OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use nsh_core::prelude::*;
+use serde_json::{Value, json};
+
+mod board;
+
+const MAX_BODY: usize = 4 * 1024 * 1024;
+
+/// The port this process listens on, once `start` has bound it.
+static BOUND: OnceLock<u16> = OnceLock::new();
+
+/// Where a phone broadcasts its probe, beside the board's own port.
+const DISCOVERY_PORT: u16 = 8788;
+/// What a phone says to the network, and what the Mac answers with its port.
+const PROBE: &[u8] = b"NAVIGATOR/1 DISCOVER";
+const OFFER: &str = "NAVIGATOR/1 OFFER ";
+/// How long one probe waits for an answer before the next tick tries again.
+const PROBE_WAIT: Duration = Duration::from_millis(1200);
+/// How long the phone's exchange may take before the Mac is presumed gone.
+const EXCHANGE_WAIT: Duration = Duration::from_secs(4);
+
+/// The Mac this phone talks to, as `host:port`; `None` until one answers.
+static PEER: Mutex<Option<String>> = Mutex::new(None);
+/// The board the app last handed the exchange thread.
+static OUTBOX: Mutex<Option<String>> = Mutex::new(None);
+/// The merged board the exchange thread last brought back, read once.
+static INBOX: Mutex<Option<String>> = Mutex::new(None);
+/// When the last exchange succeeded, in millis since the epoch.
+static SYNCED_AT: AtomicU64 = AtomicU64::new(0);
+/// Whether the last exchange with a known Mac failed.
+static UNREACHABLE: Mutex<bool> = Mutex::new(false);
+
+fn parse_cards(text: &str) -> Result<Vec<Value>, String> {
+    let value: Value = serde_json::from_str(text).map_err(|e| format!("bad JSON: {e}"))?;
+    match value {
+        Value::Array(items) => Ok(items),
+        Value::Null => Ok(Vec::new()),
+        _ => Err("expected an array of cards".to_owned()),
+    }
+}
+
+/// The list under `key` of a body, empty when it has none. A body that is a bare
+/// array is the cards of a peer that predates tags.
+fn list_of(value: &Value, key: &str) -> Result<Vec<Value>, String> {
+    match value.get(key) {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) => Ok(items.clone()),
+        Some(_) => Err(format!("expected `{key}` to be an array")),
+    }
+}
+
+/// Both lists a device sends, and the stamp it last heard from the other side.
+/// A body that is a bare array is the cards of a peer that predates tags.
+fn parse_exchange(text: &str) -> Result<(Vec<Value>, Vec<Value>, i64), String> {
+    let value: Value = serde_json::from_str(text).map_err(|e| format!("bad JSON: {e}"))?;
+    if let Value::Array(_) = value {
+        return Ok((parse_cards(text)?, Vec::new(), 0));
+    }
+    if !value.is_object() {
+        return Err("expected an object with cards and tags".to_owned());
+    }
+    Ok((
+        list_of(&value, "cards")?,
+        list_of(&value, "tags")?,
+        since_in(&value),
+    ))
+}
+
+/// A body's `since` stamp: only what changed at or after it is answered.
+fn since_in(value: &Value) -> i64 {
+    value
+        .get("since")
+        .and_then(Value::as_f64)
+        .map(|f| f as i64)
+        .unwrap_or(0)
+}
+
+/// The LAN address the phone should be pointed at, e.g. `10.0.0.5`. Reads the
+/// route to a public address without sending anything; falls back to localhost.
+fn lan_ip() -> String {
+    if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+        if socket.connect("1.1.1.1:80").is_ok() {
+            if let Ok(addr) = socket.local_addr() {
+                let ip = addr.ip().to_string();
+                if ip != "0.0.0.0" && !ip.starts_with("127.") {
+                    return ip;
+                }
+            }
+        }
+    }
+    "127.0.0.1".to_owned()
+}
+
+/// Every directed broadcast address this device can reach, one per interface,
+/// from the interface's own address and netmask.
+///
+/// A single `255.255.255.255` leaves by the default route, which on a phone
+/// with mobile data is the carrier's, not the Wi-Fi's. Asking each interface's
+/// subnet instead is what makes the probe reach the Mac beside it.
+fn broadcast_addresses() -> Vec<Ipv4Addr> {
+    let mut out = Vec::new();
+    // SAFETY: `getifaddrs` fills a list we walk, then hand back to free.
+    unsafe {
+        let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+        if libc::getifaddrs(&mut head) != 0 {
+            return out;
+        }
+        let mut current = head;
+        while !current.is_null() {
+            let entry = &*current;
+            if let (Some(addr), Some(mask)) = (ipv4_of(entry.ifa_addr), ipv4_of(entry.ifa_netmask)) {
+                if !addr.is_loopback() && !addr.is_unspecified() {
+                    let broadcast = Ipv4Addr::from(u32::from(addr) | !u32::from(mask));
+                    if !out.contains(&broadcast) {
+                        out.push(broadcast);
+                    }
+                }
+            }
+            current = entry.ifa_next;
+        }
+        libc::freeifaddrs(head);
+    }
+    out
+}
+
+/// The IPv4 address a `sockaddr` holds, if it holds one. Null is no address.
+fn ipv4_of(address: *const libc::sockaddr) -> Option<Ipv4Addr> {
+    if address.is_null() {
+        return None;
+    }
+    // SAFETY: the caller takes these pointers from `getifaddrs`, which fills
+    // each entry's family and address together.
+    unsafe {
+        if i32::from((*address).sa_family) != libc::AF_INET {
+            return None;
+        }
+        let inet = address.cast::<libc::sockaddr_in>();
+        Some(Ipv4Addr::from(u32::from_be((*inet).sin_addr.s_addr)))
+    }
+}
+
+/// Asks the network for a Mac serving the board, and returns `host:port` of
+/// the first one that answers.
+fn find_mac() -> Option<String> {
+    let socket = UdpSocket::bind(("0.0.0.0", 0)).ok()?;
+    socket.set_broadcast(true).ok()?;
+    for target in broadcast_addresses() {
+        let _ = socket.send_to(PROBE, (target, DISCOVERY_PORT));
+    }
+    let _ = socket.send_to(PROBE, (Ipv4Addr::BROADCAST, DISCOVERY_PORT));
+
+    let deadline = Instant::now() + PROBE_WAIT;
+    let mut buf = [0u8; 512];
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return None;
+        }
+        socket.set_read_timeout(Some(left)).ok()?;
+        let Ok((read, from)) = socket.recv_from(&mut buf) else {
+            continue;
+        };
+        let text = String::from_utf8_lossy(&buf[..read]);
+        let Some(port) = text.strip_prefix(OFFER).and_then(|p| p.trim().parse::<u16>().ok()) else {
+            continue;
+        };
+        // The answering datagram's own source is the Mac's address right now,
+        // whatever the lease was when the phone last synced.
+        return Some(format!("{}:{port}", from.ip()));
+    }
+}
+
+/// Answers probes with the board's port, for as long as the app is open.
+fn serve_discovery(port: u16) {
+    let Ok(socket) = UdpSocket::bind(("0.0.0.0", DISCOVERY_PORT)) else {
+        // Some other build holds the port: the phone falls back to typing an
+        // address, which still works.
+        return;
+    };
+    socket.set_broadcast(true).ok();
+    let mut buf = [0u8; 512];
+    loop {
+        let Ok((read, from)) = socket.recv_from(&mut buf) else {
+            continue;
+        };
+        if &buf[..read] != PROBE {
+            continue;
+        }
+        let _ = socket.send_to(format!("{OFFER}{port}").as_bytes(), from);
+    }
+}
+
+/// `base` as a socket address: `http://10.0.0.5:8787` or `10.0.0.5:8787`.
+fn socket_address(base: &str) -> String {
+    let rest = base.trim().trim_start_matches("http://");
+    if rest.contains(':') {
+        rest.trim_end_matches('/').to_owned()
+    } else {
+        format!("{rest}:8787")
+    }
+}
+
+/// POSTs `body` to `/state` on `base` and returns the response body.
+///
+/// Our own HTTP over a raw socket: Android refuses cleartext to a LAN address
+/// through its HTTP client, and the request is four lines anyway.
+fn post_state(base: &str, body: &str) -> Result<String, String> {
+    let address = socket_address(base);
+    let stream = TcpStream::connect_timeout(
+        &address.parse::<SocketAddr>().map_err(|e| format!("{address}: {e}"))?,
+        EXCHANGE_WAIT,
+    )
+    .map_err(|e| format!("{address}: {e}"))?;
+    stream.set_read_timeout(Some(EXCHANGE_WAIT)).ok();
+    stream.set_write_timeout(Some(EXCHANGE_WAIT)).ok();
+    let mut stream = stream;
+    let head = format!(
+        "POST /state HTTP/1.1\r\nHost: {address}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).map_err(|e| e.to_string())?;
+    stream.write_all(body.as_bytes()).map_err(|e| e.to_string())?;
+    stream.flush().map_err(|e| e.to_string())?;
+
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&response);
+    let (head, body) = text
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| "the Mac answered no body".to_owned())?;
+    if !head.starts_with("HTTP/1.1 200") {
+        return Err(head.lines().next().unwrap_or("bad answer").to_owned());
+    }
+    Ok(body.to_owned())
+}
+
+/// The phone's side: find the Mac, exchange boards, keep the last answer.
+fn exchange_loop() {
+    loop {
+        let peer = {
+            let known = PEER.lock().unwrap().clone();
+            known.or_else(|| {
+                let found = find_mac();
+                if found.is_some() {
+                    *PEER.lock().unwrap() = found.clone();
+                }
+                found
+            })
+        };
+        let Some(peer) = peer else {
+            thread::sleep(Duration::from_secs(3));
+            continue;
+        };
+        // Taking the body, not copying it: a body the Mac answered is done with,
+        // and re-sending it would re-send the same changes every 1.5 seconds for
+        // as long as the app is open.
+        let body = OUTBOX.lock().unwrap().take();
+        let Some(body) = body else {
+            thread::sleep(Duration::from_millis(400));
+            continue;
+        };
+        match post_state(&peer, &body) {
+            Ok(merged) => {
+                *INBOX.lock().unwrap() = Some(merged);
+                *UNREACHABLE.lock().unwrap() = false;
+                SYNCED_AT.store(now_millis(), Ordering::Relaxed);
+            }
+            Err(_) => {
+                // The Mac may have gone to sleep or taken a new address: drop
+                // what we knew so the next tick probes for it again. The body
+                // goes back, unless a newer one was offered meanwhile — those
+                // changes must reach the Mac even though this attempt failed.
+                {
+                    let mut outbox = OUTBOX.lock().unwrap();
+                    if outbox.is_none() {
+                        *outbox = Some(body);
+                    }
+                }
+                *PEER.lock().unwrap() = None;
+                *UNREACHABLE.lock().unwrap() = true;
+            }
+        }
+        thread::sleep(Duration::from_millis(1500));
+    }
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Handle one request: `GET /state`, `POST /state`, `GET /health`.
+fn handle(mut stream: TcpStream) {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+
+    // Read until the headers are complete, then the body the headers announce.
+    let (head_end, content_length) = loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break (None, 0),
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&buf[..pos]).to_string();
+                    let len = head
+                        .lines()
+                        .find_map(|l| {
+                            let (k, v) = l.split_once(':')?;
+                            k.eq_ignore_ascii_case("content-length")
+                                .then(|| v.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    break (Some(pos + 4), len.min(MAX_BODY));
+                }
+                if buf.len() > MAX_BODY {
+                    break (None, 0);
+                }
+            }
+            Err(_) => break (None, 0),
+        }
+    };
+
+    let Some(head_end) = head_end else {
+        let _ = respond(&mut stream, 400, "{\"error\":\"bad request\"}");
+        return;
+    };
+
+    while buf.len() < head_end + content_length {
+        match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        }
+    }
+
+    let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+    let mut parts = head.lines().next().unwrap_or("").split_whitespace();
+    let method = parts.next().unwrap_or("");
+    let target = parts.next().unwrap_or("");
+    let (path, query) = match target.split_once('?') {
+        Some((path, query)) => (path, query),
+        None => (target, ""),
+    };
+    let body = String::from_utf8_lossy(&buf[head_end..]).to_string();
+
+    match (method, path) {
+        ("GET", "/health") => match board::with(|db| board::counts(&db.conn)) {
+            Ok((cards, tags, at)) => {
+                let _ = respond(
+                    &mut stream,
+                    200,
+                    &json!({ "ok": true, "cards": cards, "tags": tags, "at": at }).to_string(),
+                );
+            }
+            Err(e) => {
+                let _ = respond(&mut stream, 500, &json!({"error": e}).to_string());
+            }
+        },
+        ("GET", "/state") => match board::with(|db| board::rows_since(&db.conn, since_of(query))) {
+            Ok(answer) => {
+                let _ = respond(&mut stream, 200, &answer);
+            }
+            Err(e) => {
+                let _ = respond(&mut stream, 500, &json!({"error": e}).to_string());
+            }
+        },
+        ("POST", "/state") => match parse_exchange(&body) {
+            Ok((incoming, incoming_tags, since)) => {
+                // The phone's changes land first, then it is told what its
+                // `since` missed: one round trip keeps both boards equal, and
+                // nothing but the difference crosses the network.
+                let merged = board::with(|db| {
+                    board::upsert(&mut db.conn, &incoming, &incoming_tags)?;
+                    board::mark_seeded(&db.conn)?;
+                    board::rows_since(&db.conn, since)
+                });
+                match merged {
+                    Ok(answer) => {
+                        let _ = respond(&mut stream, 200, &answer);
+                    }
+                    Err(e) => {
+                        let _ = respond(&mut stream, 500, &json!({"error": e}).to_string());
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = respond(&mut stream, 400, &json!({"error": e}).to_string());
+            }
+        },
+        _ => {
+            let _ = respond(&mut stream, 404, "{\"error\":\"not found\"}");
+        }
+    }
+}
+
+/// `since` out of a query string (`since=1762500000000`), 0 when absent.
+fn since_of(query: &str) -> i64 {
+    query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("since="))
+        .and_then(|value| value.parse::<f64>().ok())
+        .map(|value| value as i64)
+        .unwrap_or(0)
+}
+
+fn respond(stream: &mut TcpStream, status: u16, body: &str) -> std::io::Result<()> {
+    let reason = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        500 => "Internal Server Error",
+        _ => "Not Found",
+    };
+    let head = format!(
+        "HTTP/1.1 {status} {reason}\r\n\
+         Content-Type: application/json; charset=utf-8\r\n\
+         Content-Length: {}\r\n\
+         Access-Control-Allow-Origin: *\r\n\
+         Access-Control-Allow-Headers: content-type\r\n\
+         Connection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(body.as_bytes())?;
+    stream.flush()
+}
+
+/// The crate's UI set: what `App.tsx` imports from `app/native`.
+#[native_module("app/native")]
+fn native(registry: &mut Registry) {
+    registry.module::<Board>();
+    registry.module::<Sync>();
+    registry.module::<Reminder>();
+}
+
+/// The board's store, in SQLite.
+///
+/// The database *is* the board: the interface loads it once at launch, saves
+/// each change a moment after the user makes it, and the LAN service merges
+/// the phone's changes into the same file. There is no second copy to keep in
+/// step, so a card written by the phone and a card written by this Mac are
+/// ordered by the same `updatedAt` rule.
+///
+/// The path is the app's data directory, which the interface passes in: macOS
+/// keeps it under `~/Library/Application Support/<bundle id>/`, Android in the
+/// app's private files. `""` keeps the board in memory, which is what a test
+/// gets so it can never reach the board the user is looking at.
+#[module]
+pub struct Board;
+
+#[module]
+impl Board {
+    /// Opens the board's file (creating it, its schema, and its directory) and
+    /// returns the path it used. Safe to call more than once.
+    pub fn open(dir: String) -> Result<String, String> {
+        board::open(&dir)
+    }
+
+    /// The whole board as `{ cards, tags, seeded }`, cards in board order.
+    /// `seeded` says a board has been saved at least once: an empty board with
+    /// `seeded` is one the user emptied, not a first run to fill with samples.
+    pub fn load() -> Result<String, String> {
+        board::with(|db| board::all(&db.conn))
+    }
+
+    /// Writes what changed: `{ cards, tags, order? }`, where `order` carries the
+    /// columns whose card order moved (`{ "todo": ["c3", "c1"] }`). Returns how
+    /// many rows were written.
+    pub fn save(changes: String) -> Result<u32, String> {
+        let value: Value = serde_json::from_str(&changes).map_err(|e| format!("bad JSON: {e}"))?;
+        let cards = list_of(&value, "cards")?;
+        let tags = list_of(&value, "tags")?;
+        let order = value
+            .get("order")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        board::with(|db| {
+            let mut written = board::upsert(&mut db.conn, &cards, &tags)?;
+            written += board::apply_order(&mut db.conn, &order)?;
+            board::mark_seeded(&db.conn)?;
+            Ok(written as u32)
+        })
+    }
+
+    /// Everything stamped at or after `stamp`, plus the newest stamp the board
+    /// holds (`at`) and how many live cards it has.
+    pub fn since(stamp: f64) -> Result<String, String> {
+        board::with(|db| board::rows_since(&db.conn, stamp as i64))
+    }
+
+    /// Empties the board. For a test that needs a first run; the app never
+    /// clears the user's board.
+    pub fn clear() -> Result<(), String> {
+        board::with(|db| board::clear(&db.conn))
+    }
+}
+
+/// Sync between this Mac and the phone on the same Wi-Fi.
+#[module]
+pub struct Sync;
+
+#[module]
+impl Sync {
+    /// Starts the service on `port` (0 picks a free one); the port it bound.
+    ///
+    /// Runs for as long as the app does: the listener is a background thread
+    /// that ends with the process, so there is no service to start or stop by
+    /// hand.
+    pub fn start(port: u16) -> Result<u16, String> {
+        // A second call returns the port already bound instead of leaking a
+        // second listener onto a socket the caller can never name again.
+        if let Some(bound) = BOUND.get() {
+            return Ok(*bound);
+        }
+        // A port taken by another copy of this app (a development host beside
+        // the installed one) is not a failure: take a free port instead and let
+        // discovery announce whichever one this process got.
+        let listener = TcpListener::bind(("0.0.0.0", port))
+            .or_else(|_| TcpListener::bind(("0.0.0.0", 0)))
+            .map_err(|e| format!("cannot listen on port {port}: {e}"))?;
+        let bound = listener.local_addr().map_err(|e| e.to_string())?.port();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(stream) => {
+                        thread::spawn(move || handle(stream));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        thread::spawn(move || serve_discovery(bound));
+        let _ = BOUND.set(bound);
+        Ok(bound)
+    }
+
+    /// The URL to point the phone at, e.g. `http://10.0.0.5:8787`.
+    pub fn address(port: u16) -> String {
+        format!("http://{}:{}", lan_ip(), port)
+    }
+
+    /// Starts this device looking for a Mac, and keeps exchanging boards.
+    ///
+    /// Nothing here touches the network on the caller's thread: the work
+    /// happens in a thread of its own, which is why the phone's interface
+    /// never stalls while a Mac is asleep.
+    pub fn watch() {
+        static WATCHING: OnceLock<()> = OnceLock::new();
+        if WATCHING.set(()).is_ok() {
+            thread::spawn(exchange_loop);
+        }
+    }
+
+    /// Hands the exchange thread the board to push; it keeps the latest.
+    pub fn offer(cards_json: String) {
+        *OUTBOX.lock().unwrap() = Some(cards_json);
+    }
+
+    /// The board the Mac merged in last, once; empty when nothing is new.
+    pub fn inbox() -> String {
+        INBOX.lock().unwrap().take().unwrap_or_default()
+    }
+
+    /// Where sync stands, as JSON: the Mac in use, whether it answered last
+    /// time, and when it last did (millis since the epoch; 0 for never).
+    pub fn status() -> String {
+        let peer = PEER.lock().unwrap().clone().unwrap_or_default();
+        json!({
+            "peer": peer,
+            "unreachable": *UNREACHABLE.lock().unwrap(),
+            "at": SYNCED_AT.load(Ordering::Relaxed),
+        })
+        .to_string()
+    }
+
+    /// Syncs with `address` from now on, instead of whatever answers a probe.
+    pub fn use_address(address: String) {
+        let address = socket_address(&address);
+        *PEER.lock().unwrap() = Some(address);
+        *UNREACHABLE.lock().unwrap() = false;
+    }
+}
+
+/// Deadline reminders.
+///
+/// nsh has no notification API, so this is the one place a due date leaves the
+/// app: the Mac hands it to `UNUserNotificationCenter`, which owns the schedule
+/// from then on. The system delivers it whether or not the app is still open,
+/// plays the sound the user chose in Settings, and lists it in Notification
+/// Centre beside every other app's.
+///
+/// Android cannot be served the same way: a notification needs
+/// `POST_NOTIFICATIONS` in the manifest on API 33 and newer, and `nsh package`
+/// writes that manifest with `INTERNET` alone and offers no way to add to it.
+/// So `status` says `unsupported` there and the phone reminds from inside the
+/// app instead, which is honest about what it can do rather than posting a
+/// notification the system drops.
+#[module]
+pub struct Reminder;
+
+/// What the user allowed, as last read: 0 unknown, 1 granted, 2 denied, and
+/// 3 there is no notification centre to ask — a test binary or a development
+/// host, whose process has no bundle to be identified by.
+static AUTH: AtomicU64 = AtomicU64::new(0);
+
+#[module]
+impl Reminder {
+    /// Asks once for permission to show notifications, and reports what the
+    /// user allowed. The answer arrives asynchronously; call `status` again
+    /// after a moment to read it.
+    pub fn request() -> String {
+        #[cfg(target_os = "macos")]
+        {
+            return macos::request();
+        }
+        #[allow(unreachable_code)]
+        "unsupported".to_owned()
+    }
+
+    /// What the app may do now: `granted`, `denied`, `unknown` (not asked yet)
+    /// or `unsupported` where the platform cannot post one.
+    pub fn status() -> String {
+        #[cfg(target_os = "macos")]
+        {
+            return macos::status();
+        }
+        #[allow(unreachable_code)]
+        "unsupported".to_owned()
+    }
+
+    /// Schedules one notification for card `id`, at `at` (millis since the
+    /// epoch), replacing whatever was pending under the same id.
+    ///
+    /// A date in the past is not an error: the card is overdue, and a
+    /// notification about a deadline that already passed is noise. It is
+    /// dropped, and the app says so by showing the overdue pill instead.
+    pub fn schedule(id: String, title: String, body: String, at: f64) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        {
+            return macos::schedule(&id, &title, &body, at);
+        }
+        #[allow(unreachable_code)]
+        {
+            let _ = (id, title, body, at);
+            Err("this platform cannot post a notification".to_owned())
+        }
+    }
+
+    /// Takes back a reminder that is still pending.
+    pub fn cancel(id: String) {
+        #[cfg(target_os = "macos")]
+        macos::cancel(&id);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = id;
+        }
+    }
+
+    /// Takes back every pending reminder, for the app's own reset.
+    pub fn cancel_all() {
+        #[cfg(target_os = "macos")]
+        macos::cancel_all();
+    }
+
+    /// The reminders the system still holds, as a JSON array of card ids:
+    /// `[]` when there are none, `""` while the answer is still on its way.
+    ///
+    /// Asking the system, not the app, is the only way to know a reminder
+    /// really was scheduled — which is what a test has to check.
+    pub fn pending() -> String {
+        #[cfg(target_os = "macos")]
+        {
+            return macos::pending();
+        }
+        #[allow(unreachable_code)]
+        "[]".to_owned()
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use super::{AUTH, Ordering};
+    use objc2::rc::Retained;
+    use objc2::runtime::Bool;
+    use objc2_foundation::{NSArray, NSBundle, NSError, NSString};
+    use objc2_user_notifications::{
+        UNAuthorizationOptions, UNAuthorizationStatus, UNMutableNotificationContent,
+        UNNotificationRequest, UNNotificationSettings, UNNotificationSound,
+        UNTimeIntervalNotificationTrigger, UNUserNotificationCenter,
+    };
+
+    /// The system's notification centre, or `None` when the process is not an
+    /// app the system can address.
+    ///
+    /// `currentNotificationCenter` raises an Objective-C exception — which
+    /// aborts the process, not the call — when the process has no bundle
+    /// identifier: `nsh test`'s runner is a bare executable. Asking first, and
+    /// catching anyway, is what keeps a headless run from dying here.
+    fn center() -> Option<Retained<UNUserNotificationCenter>> {
+        if NSBundle::mainBundle().bundleIdentifier().is_none() {
+            AUTH.store(3, Ordering::Relaxed);
+            return None;
+        }
+        match objc2::exception::catch(|| UNUserNotificationCenter::currentNotificationCenter()) {
+            Ok(center) => Some(center),
+            Err(_) => {
+                AUTH.store(3, Ordering::Relaxed);
+                None
+            }
+        }
+    }
+
+    /// Notification identifiers are the card's id, so a rescheduled card
+    /// replaces its own reminder instead of stacking a second one.
+    fn identifier(id: &str) -> Retained<NSString> {
+        NSString::from_str(&format!("navigator.card.{id}"))
+    }
+
+    fn remember(status: UNAuthorizationStatus) {
+        let code = if status == UNAuthorizationStatus::Authorized
+            || status == UNAuthorizationStatus::Provisional
+        {
+            1
+        } else if status == UNAuthorizationStatus::Denied {
+            2
+        } else {
+            0
+        };
+        AUTH.store(code, Ordering::Relaxed);
+    }
+
+    pub fn request() -> String {
+        let Some(center) = center() else {
+            return "unsupported".to_owned();
+        };
+        // `Alert` is the banner a reminder deserves; `Sound` is the sound the
+        // user picked for this app in System Settings, so the reminder sound is
+        // the system's, not a file the app carries.
+        let options = UNAuthorizationOptions::Alert
+            | UNAuthorizationOptions::Sound
+            | UNAuthorizationOptions::Badge;
+        let block = block2::RcBlock::new(move |granted: Bool, _error: *mut NSError| {
+            AUTH.store(if granted.as_bool() { 1 } else { 2 }, Ordering::Relaxed);
+        });
+        center.requestAuthorizationWithOptions_completionHandler(options, &block);
+        "unknown".to_owned()
+    }
+
+    pub fn status() -> String {
+        if AUTH.load(Ordering::Relaxed) == 0 {
+            // Before the first ask, read the setting the user already made:
+            // a permission granted in an earlier run is not asked for again.
+            if let Some(center) = center() {
+                let block = block2::RcBlock::new(move |settings: std::ptr::NonNull<UNNotificationSettings>| {
+                    remember(unsafe { settings.as_ref() }.authorizationStatus());
+                });
+                center.getNotificationSettingsWithCompletionHandler(&block);
+            }
+        }
+        match AUTH.load(Ordering::Relaxed) {
+            1 => "granted".to_owned(),
+            2 => "denied".to_owned(),
+            3 => "unsupported".to_owned(),
+            _ => "unknown".to_owned(),
+        }
+    }
+
+    pub fn schedule(id: &str, title: &str, body: &str, at: f64) -> Result<(), String> {
+        let Some(center) = center() else {
+            return Err("this process cannot post a notification".to_owned());
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as f64)
+            .unwrap_or(0.0);
+        let seconds = (at - now) / 1000.0;
+        // A trigger of zero or less is an exception in the framework, not a
+        // missed deadline: a card due in the past simply has no reminder.
+        if !(seconds.is_finite() && seconds > 0.5) {
+            return Ok(());
+        }
+
+        let content = UNMutableNotificationContent::new();
+        content.setTitle(&NSString::from_str(if title.is_empty() { "截止时间到了" } else { title }));
+        if !body.is_empty() {
+            content.setBody(&NSString::from_str(body));
+        }
+        content.setSound(Some(&UNNotificationSound::defaultSound()));
+
+        let trigger =
+            UNTimeIntervalNotificationTrigger::triggerWithTimeInterval_repeats(seconds, false);
+        let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
+            &identifier(id),
+            &content,
+            Some(&trigger),
+        );
+
+        let block = block2::RcBlock::new(move |error: *mut NSError| {
+            if let Some(error) = std::ptr::NonNull::new(error) {
+                // `NSError` is not `Send`, so the message is read here, on the
+                // thread the system calls back on, and only text is kept.
+                let text = unsafe { error.as_ref().localizedDescription().to_string() };
+                eprintln!("reminder: the system refused a notification: {text}");
+            }
+        });
+        center.addNotificationRequest_withCompletionHandler(&request, Some(&block));
+
+        Ok(())
+    }
+
+    pub fn cancel(id: &str) {
+        let Some(center) = center() else { return };
+        let ids = NSArray::from_retained_slice(&[identifier(id)]);
+        center.removePendingNotificationRequestsWithIdentifiers(&ids);
+        center.removeDeliveredNotificationsWithIdentifiers(&ids);
+    }
+
+    pub fn cancel_all() {
+        if let Some(center) = center() {
+            center.removeAllPendingNotificationRequests();
+        }
+    }
+
+    /// The identifiers the system holds, as last asked. `None` until the first
+    /// answer comes back.
+    fn held() -> &'static std::sync::Mutex<Option<Vec<String>>> {
+        static HELD: std::sync::OnceLock<std::sync::Mutex<Option<Vec<String>>>> =
+            std::sync::OnceLock::new();
+        HELD.get_or_init(|| std::sync::Mutex::new(None))
+    }
+
+    pub fn pending() -> String {
+        let Some(center) = center() else {
+            return "[]".to_owned();
+        };
+        let block = block2::RcBlock::new(
+            move |requests: std::ptr::NonNull<NSArray<UNNotificationRequest>>| {
+                let requests = unsafe { requests.as_ref() };
+                let mut ids = Vec::new();
+                for request in requests.iter() {
+                    ids.push(request.identifier().to_string());
+                }
+                if let Ok(mut held) = held().lock() {
+                    *held = Some(ids);
+                }
+            },
+        );
+        center.getPendingNotificationRequestsWithCompletionHandler(&block);
+        let answer = held().lock().ok().and_then(|held| held.clone());
+        match answer {
+            Some(ids) => serde_json::to_string(&ids).unwrap_or_else(|_| "[]".to_owned()),
+            None => String::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_non_arrays() {
+        assert!(parse_cards("{\"cards\":[]}").is_err());
+        assert_eq!(parse_cards("[]").unwrap().len(), 0);
+    }
+
+    #[test]
+    fn a_body_carries_cards_tags_and_a_stamp() {
+        let (cards, tags, since) =
+            parse_exchange("{\"cards\":[{\"id\":\"c1\"}],\"tags\":[{\"id\":\"t1\"}],\"since\":42}")
+                .unwrap();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(tags[0]["id"], "t1");
+        assert_eq!(since, 42);
+        // A body from a peer that predates tags is still a board, and one that
+        // names no `since` asks for everything.
+        let (cards, tags, since) = parse_exchange("[{\"id\":\"c1\"}]").unwrap();
+        assert_eq!(cards.len(), 1);
+        assert!(tags.is_empty());
+        assert_eq!(since, 0);
+        // And one that names neither is empty, not an error.
+        let (cards, tags, since) = parse_exchange("{}").unwrap();
+        assert!(cards.is_empty() && tags.is_empty());
+        assert_eq!(since, 0);
+    }
+
+    #[test]
+    fn a_query_string_carries_the_stamp() {
+        assert_eq!(since_of("since=1762500000000"), 1762500000000);
+        assert_eq!(since_of("other=1&since=7"), 7);
+        assert_eq!(since_of(""), 0);
+        assert_eq!(since_of("since=not-a-number"), 0);
+    }
+
+    #[test]
+    fn an_address_arrives_with_or_without_a_scheme() {
+        assert_eq!(socket_address("http://10.0.0.5:8787"), "10.0.0.5:8787");
+        assert_eq!(socket_address("10.0.0.5:8787/"), "10.0.0.5:8787");
+        assert_eq!(socket_address(" 10.0.0.5 "), "10.0.0.5:8787");
+        assert_eq!(socket_address("http://10.0.0.5"), "10.0.0.5:8787");
+    }
+}

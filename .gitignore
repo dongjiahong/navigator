@@ -1,0 +1,4 @@
+.DS_Store
+.nsh/
+target/
+node_modules/

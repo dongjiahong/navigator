@@ -1,0 +1,5 @@
+[toolchain]
+# nsh 0.4.0's crates use library features that only newer compilers have
+# (isolate_lowest_one, const f32::round, if-let guards). The machine's default
+# 1.89 cannot build them; pinning here fixes it for this app only.
+channel = "1.99.1"

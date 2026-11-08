@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Navigator's icon, derived from ../navigator.svg. The rounded squircle is
+       the icon: macOS does not round an app icon for you, so the shape has to be
+       in the picture. The body is 824 of the 1024 canvas on Apple's grid, with
+       transparent margins the Dock's own background shows through, exactly as
+       it does around every other app there. nsh converts this PNG to the .icns
+       with sips. -->
+  <g transform="translate(100 100) scale(1.609375)">
+    <rect width="512" height="512" rx="115" fill="#243547" />
+    <g fill="none" stroke="#6A7D8E" stroke-width="7.5" stroke-linejoin="round" stroke-linecap="round">
+      <polygon points="256,138 273,215 322,190 297,239 374,256 297,273 322,322 273,297 256,374 239,297 190,322 215,273 138,256 215,239 190,190 239,215" />
+    </g>
+    <g fill="none" stroke="#DFC39D" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="256" cy="256" r="164" stroke-width="13" />
+      <circle cx="256" cy="256" r="138" stroke-width="7" />
+      <polygon points="256,64 248,92 264,92" fill="#DFC39D" stroke-width="4" />
+      <polygon points="256,448 248,420 264,420" fill="#DFC39D" stroke-width="4" />
+      <polygon points="64,256 92,248 92,264" fill="#DFC39D" stroke-width="4" />
+      <polygon points="448,256 420,248 420,264" fill="#DFC39D" stroke-width="4" />
+      <g transform="rotate(42 256 256)">
+        <polygon points="256,130 282,256 256,382 230,256" fill="#243547" stroke="#DFC39D" stroke-width="15" stroke-linejoin="round" />
+        <circle cx="256" cy="256" r="9" fill="#DFC39D" stroke="none" />
+      </g>
+    </g>
+  </g>
+</svg>
