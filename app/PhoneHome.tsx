@@ -16,6 +16,7 @@ import { Input, Sheet } from "nsh/base";
 import {
   COLUMNS,
   addCard,
+  board,
   boardTags,
   cards,
   isBlank,
@@ -25,11 +26,24 @@ import {
   removeSamples,
   sampleCardsLeft,
   setStatus,
-  tagOf,
   type Card,
   type Status,
 } from "./data";
-import { clearFilters, filteredBoard, isFiltering, searchQuery, tagFilter } from "./filters";
+import {
+  DUE_LABEL,
+  clearFilters,
+  clearTagFilters,
+  dueCounts,
+  dueFilter,
+  filterSummary,
+  filteredBoard,
+  isFiltering,
+  searchQuery,
+  selectedTags,
+  setDueFilter,
+  toggleTagFilter,
+  type DueCondition,
+} from "./filters";
 import {
   DueBadge,
   DueEditor,
@@ -1044,51 +1058,50 @@ function collapseSearch(): void {
   searchQuery.set("");
 }
 
-/** What the line over the list names: the tag, the words, or both. */
+/** What the line over the list names: the tags, the date condition, the words. */
 function filterLabel(): string {
-  const tag = tagFilter();
-  const words = searchQuery().trim();
-  const name = tag ? tagOf(tag).label : "";
-  if (name && words) return `${name} · 「${words}」`;
-  if (name) return name;
-  return `「${words}」`;
+  return filterSummary();
 }
 
+/** The three date conditions, in the order the sheet lists them. */
+const DUE_ORDER: DueCondition[] = ["today", "overdue", "none"];
+
 /**
- * The funnel: the tag filter, in a sheet.
+ * The funnel: every filter, in a sheet.
  *
  * The strip of chips stood over the list at all times, which is a row of the
  * phone's only screen spent on a filter most sessions do not set. The chip is
- * still the control it was — one tag at a time, with the five hues it draws in
- * — it is just one press away instead of always being open.
+ * still the control it was, it is just one press away instead of always being
+ * open — and the funnel says it is on whenever any of the filters is.
  */
 function FilterButton() {
-  const tag = () => (tagFilter() ? tagOf(tagFilter()!) : null);
+  const on = () => isFiltering();
   return (
     <View
       testID="phone-filter"
       onPress={() => filterOpen.set(true)}
       role="button"
-      accessibilityLabel={tag() ? `筛选：${tag()!.label}` : "筛选"}
+      accessibilityLabel={on() ? `筛选：${filterLabel()}` : "筛选"}
       activeStyle={{ opacity: 0.55 }}
       style={{ width: 36, height: 36, alignItems: "center", justifyContent: "center" }}
     >
       <Icon
         name="filter"
         size={17}
-        tint={tag() ? hueColor(tag()!.hue) : theme().textSecondary}
+        tint={on() ? onAccentWash() : theme().textSecondary}
         width={1.9}
       />
     </View>
   );
 }
 
-/** One line of the filter sheet: a tag, or 全部, with its check. */
+/** One line of the filter sheet: a tag, a date condition, with its check. */
 function FilterOption(props: {
   testID: string;
   label: string;
   on: boolean;
   color?: string;
+  count?: number;
   onPress: () => void;
 }) {
   return (
@@ -1114,12 +1127,25 @@ function FilterOption(props: {
         <View style={{ width: 7, height: 7 }} />
       )}
       <Text style={{ flex: 1, fontSize: 15, color: theme().text }}>{props.label}</Text>
+      {props.count === undefined ? null : (
+        <Text
+          style={{
+            fontSize: 13,
+            fontWeight: "500",
+            fontVariant: ["tabular-nums"],
+            color: props.count === 0 ? alpha(theme().textTertiary, 0.55) : theme().textTertiary,
+          }}
+        >
+          {props.count}
+        </Text>
+      )}
       {props.on ? <Icon name="check" size={15} tint={theme().accent} width={2.2} /> : null}
     </View>
   );
 }
 
 function FilterSheet() {
+  const counts = () => dueCounts(board(), Date.now());
   return (
     <Sheet
       open={filterOpen()}
@@ -1138,30 +1164,74 @@ function FilterSheet() {
           <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: alpha(theme().textTertiary, 0.45) }} />
         </View>
         <Text style={{ fontSize: 17, fontWeight: "600", color: theme().text, paddingBottom: 4 }}>筛选</Text>
+
+        {/* Tags are several at once — a thumb picking 工作 and 学习 means either
+            — so a press adds or takes away and the sheet stays up for the next. */}
         <FilterOption
           testID="filter-all"
-          label="全部"
-          on={tagFilter() === null}
-          onPress={() => {
-            tagFilter.set(null);
-            filterOpen.set(false);
-          }}
+          label="全部标签"
+          on={selectedTags().length === 0}
+          onPress={clearTagFilters}
         />
         {boardTags().map((tag) => (
           <FilterOption
             testID={`filter-tag-${tag.id}`}
             label={tag.label}
             color={hueColor(tag.hue)}
-            on={tagFilter() === tag.id}
-            onPress={() => {
-              tagFilter.set(tag.id);
-              filterOpen.set(false);
-            }}
+            on={selectedTags().includes(tag.id)}
+            onPress={() => toggleTagFilter(tag.id)}
           />
         ))}
+
         <View style={{ height: 1, backgroundColor: theme().hairline, marginVertical: 10 }} />
-        <View style={{ flexDirection: "row" }}>
+
+        {/* When it is due: one at a time, and the counts are of the whole board
+            — a number that moved as tags were picked would be counting the view. */}
+        <FilterOption
+          testID="filter-due-all"
+          label="全部日期"
+          on={dueFilter() === null}
+          onPress={() => setDueFilter(null)}
+        />
+        {DUE_ORDER.map((id) => (
+          <FilterOption
+            testID={`filter-due-${id}`}
+            label={DUE_LABEL[id]}
+            count={counts()[id]}
+            on={dueFilter() === id}
+            onPress={() => setDueFilter(dueFilter() === id ? null : id)}
+          />
+        ))}
+
+        <View style={{ height: 1, backgroundColor: theme().hairline, marginVertical: 10 }} />
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <TagManagerButton size="phone" />
+          <View style={{ flex: 1 }} />
+          <View
+            testID="filter-clear-all"
+            onPress={() => clearFilters()}
+            role="button"
+            accessibilityLabel="清除全部"
+            activeStyle={{ opacity: 0.6 }}
+            style={{ paddingHorizontal: 12, paddingVertical: 9, borderRadius: 9 }}
+          >
+            <Text style={{ fontSize: 14, fontWeight: "500", color: theme().textTertiary }}>清除全部</Text>
+          </View>
+          <View
+            testID="filter-done"
+            onPress={() => filterOpen.set(false)}
+            role="button"
+            accessibilityLabel="完成"
+            activeStyle={{ opacity: 0.6 }}
+            style={{
+              paddingHorizontal: 14,
+              paddingVertical: 9,
+              borderRadius: 9,
+              backgroundColor: theme().accentSoft,
+            }}
+          >
+            <Text style={{ fontSize: 14, fontWeight: "600", color: onAccentWash() }}>完成</Text>
+          </View>
         </View>
       </View>
     </Sheet>
@@ -1376,7 +1446,10 @@ export function PhoneHome() {
             paddingBottom: 6,
           }}
         >
-          <Text style={{ fontSize: 12.5, color: theme().textTertiary, numberOfLines: 1 }}>
+          {/* One line, and the line gives rather than the list: several tags and
+              a date condition are a long sentence, and 「…」 at the end of it is
+              honest where a second row is a banner. */}
+          <Text style={{ flexShrink: 1, fontSize: 12.5, color: theme().textTertiary, numberOfLines: 1 }}>
             正在筛选：{filterLabel()}
           </Text>
           <View

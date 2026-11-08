@@ -72,6 +72,21 @@ test("mac deadline calendar dark", async () => {
 });
 
 /**
+ * The filter row in the dark scheme, where a chosen chip is the accent's wash
+ * under its muted twin: the surface and the ink both change, and the tags' own
+ * dots sit between them.
+ */
+test("mac filter row dark", async () => {
+  const app = await openSized(1280, 820, DARK);
+  if (!app || !(await canDraw(app))) return;
+  await app.press("label:工作");
+  await app.press("label:学习");
+  await app.press("label:今天");
+  await app.wait(300);
+  await app.screenshot("mac-filters-dark.png");
+});
+
+/**
  * The keyboard's cursor in the dark scheme, where its fill is a step off the
  * card and the contrast question is a real one: the open card's fill is the
  * same token in dark, so if the two won't separate here they won't separate at

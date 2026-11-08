@@ -1,7 +1,15 @@
 import { Scroll, Text, View, effect, keymap, signal, windowSize } from "nsh";
 import { Dialog, Input } from "nsh/base";
 import { COLUMNS, boardTags, cards, sampleCardsLeft, type Card, type Status, type Tag } from "./data";
-import { clearFilters, tagFilter } from "./filters";
+import {
+  DUE_LABEL,
+  clearFilters,
+  dueFilter,
+  selectedTags,
+  setDueFilter,
+  toggleTagFilter,
+  type DueCondition,
+} from "./filters";
 import { LEAD_CHOICES, leadMinutes, setLeadMinutes } from "./deadline";
 import { Icon, IconButton, clearArchive, clearSamples, managingTags } from "./ui";
 import { hueColor, theme, type Hue } from "./theme";
@@ -22,6 +30,7 @@ export type CommandKind =
   | "new"
   | "open"
   | "tag"
+  | "due"
   | "unfilter"
   | "clear-archive"
   | "clear-samples"
@@ -40,6 +49,8 @@ export type Command = {
   /** The tag a `tag` command narrows to, and the dot its row draws. */
   tagId?: string;
   hue?: Hue;
+  /** The date condition a `due` command sets; `null` is every day. */
+  due?: DueCondition | null;
   /** The lead time a `lead` command sets, in minutes; `0` is off. */
   lead?: number;
 };
@@ -98,6 +109,10 @@ export function rankCommands(
   all: Card[],
   tags: Tag[],
   lead: number = leadMinutes(),
+  // What is filtered right now. Passed in rather than read, so the ranking is a
+  // function of its arguments; the default is the board's own state, which is
+  // what the palette draws from.
+  view: { tags: string[]; due: DueCondition | null } = { tags: selectedTags(), due: dueFilter() },
 ): Command[] {
   const q = query.trim().toLowerCase();
   const tagName = (id: string) => tags.find((t) => t.id === id)?.label ?? id;
@@ -131,13 +146,50 @@ export function rankCommands(
 
   offer({ id: "tags", kind: "tags", label: "标签管理" }, "标签管理 标签 tag", 80);
 
+  // The palette has one row per tag, and it toggles: narrowing to 工作 and then
+  // to 学习 is the same list the strip builds, and a second press on the word
+  // that is already in takes it out. The row says 当前 when it is in.
   for (const tag of tags) {
+    const on = view.tags.includes(tag.id);
     offer(
-      { id: `tag-${tag.id}`, kind: "tag", tagId: tag.id, hue: tag.hue, label: `按标签筛选：${tag.label}` },
+      {
+        id: `tag-${tag.id}`,
+        kind: "tag",
+        tagId: tag.id,
+        hue: tag.hue,
+        label: `切换标签筛选：${tag.label}`,
+        hint: on ? "当前" : undefined,
+      },
       // The label as it is written, and the tag's name on its own: typing
       // 学习 narrows to 学习, typing the whole row narrows to that one row.
-      `按标签筛选：${tag.label} ${tag.label}`,
+      `切换标签筛选：${tag.label} ${tag.label}`,
       70,
+    );
+  }
+
+  // The date group, one row per condition plus the way back to every day. They
+  // are the strip's chips without the pointer: the same four states, and the one
+  // in force says so on its own row.
+  const dueRows: { id: string; due: DueCondition | null; label: string; words: string }[] = [
+    { id: "due-today", due: "today", label: `筛选：${DUE_LABEL.today}`, words: "筛选 今天 到期 due today" },
+    { id: "due-overdue", due: "overdue", label: `筛选：${DUE_LABEL.overdue}`, words: "筛选 已逾期 过期 逾期 late overdue" },
+    { id: "due-none", due: "none", label: `筛选：${DUE_LABEL.none}`, words: "筛选 无日期 没有日期 没定 no date" },
+    { id: "due-all", due: null, label: "筛选：全部日期", words: "筛选 全部日期 所有 日期 all dates" },
+  ];
+  for (const row of dueRows) {
+    const on = view.due === row.due;
+    offer(
+      {
+        id: row.id,
+        kind: "due",
+        due: row.due,
+        label: row.label,
+        hint: on ? "当前" : undefined,
+      },
+      // The label as it is written comes first, then the words a user might
+      // reach for instead: 「今天」, 到期, 逾期, 无日期.
+      `${row.label} ${row.words}`,
+      65,
     );
   }
 
@@ -247,7 +299,13 @@ export function CommandPalette(props: { onNew: () => void; onOpen: (id: string) 
         if (chosen.cardId) props.onOpen(chosen.cardId);
         break;
       case "tag":
-        tagFilter.set(chosen.tagId ?? null);
+        // A press is a toggle: the palette offers the same selection the strip
+        // does, and choosing a tag that is already narrowing the board is the
+        // natural way to stop narrowing by it.
+        if (chosen.tagId) toggleTagFilter(chosen.tagId);
+        break;
+      case "due":
+        setDueFilter(chosen.due ?? null);
         break;
       case "unfilter":
         clearFilters();
@@ -462,6 +520,7 @@ function commandGlyph(kind: CommandKind): "plus" | "archive" | "tag" | "inbox" |
     case "unfilter":
       return "inbox";
     case "lead":
+    case "due":
       return "calendar";
     default:
       return "chevron";

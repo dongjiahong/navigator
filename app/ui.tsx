@@ -30,7 +30,7 @@ import {
   boardTags,
   type Tag,
 } from "./data";
-import { clearFilters, filteredBoard, searchQuery, tagFilter } from "./filters";
+import { clearFilters, filteredBoard, searchQuery } from "./filters";
 import { linksIn } from "./text";
 
 /** `#rrggbb` → `rgba(r, g, b, a)`. */
@@ -424,78 +424,9 @@ export function blurSearch(): void {
 }
 
 /**
- * One filter control. Tags keep their dot as the identity; selection is paper
- * pressed into the desk rather than a second wash of the tag's own hue, so the
- * strip never becomes five competing buttons.
+ * The way out of every filter at once: the tags, the date condition and the
+ * search, so the board is one press from whole.
  */
-function FilterChip(props: {
-  label: string;
-  on: boolean;
-  color?: string;
-  size?: "mac" | "phone";
-  onPress: () => void;
-}) {
-  const phone = props.size === "phone";
-  return (
-    <View
-      onPress={props.onPress}
-      role="button"
-      accessibilityLabel={props.label}
-      accessibilityState={{ selected: props.on }}
-      activeStyle={{ opacity: 0.65 }}
-      style={{
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 6,
-        height: phone ? 30 : 24,
-        paddingHorizontal: phone ? 12 : 9,
-        borderRadius: 7,
-        backgroundColor: props.on ? theme().select : theme().chip,
-        borderWidth: props.on ? 1 : 0,
-        borderColor: theme().selectEdge,
-      }}
-    >
-      {props.color ? (
-        <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: props.color }} />
-      ) : null}
-      <Text
-        style={{
-          fontSize: phone ? 12.5 : 11.5,
-          fontWeight: props.on ? "600" : "500",
-          color: props.on ? theme().text : theme().textSecondary,
-        }}
-      >
-        {props.label}
-      </Text>
-    </View>
-  );
-}
-
-/** 全部, then one chip per tag. Tapping the selected tag again shows everything. */
-export function TagFilterRow(props: { size?: "mac" | "phone" }) {
-  const phone = props.size === "phone";
-  return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: phone ? 7 : 7 }}>
-      <FilterChip
-        label="全部"
-        size={props.size}
-        on={tagFilter() === null}
-        onPress={() => tagFilter.set(null)}
-      />
-      {boardTags().map((tag) => (
-        <FilterChip
-          label={tag.label}
-          color={hueColor(tag.hue)}
-          size={props.size}
-          on={tagFilter() === tag.id}
-          onPress={() => tagFilter.set(tagFilter() === tag.id ? null : tag.id)}
-        />
-      ))}
-    </View>
-  );
-}
-
-/** Drops the tag and the search together, so the board is one tap from whole. */
 export function ClearFilterButton(props: { size?: "mac" | "phone" }) {
   const phone = props.size === "phone";
   return (
