@@ -1,5 +1,5 @@
 import { LayoutAnimation, List, Overlay, PanResponder, Text, View, signal } from "nsh";
-import { COLUMNS, moveCard, type Card, type Status } from "./data";
+import { COLUMNS, moveCard, setStatus, type Card, type Status } from "./data";
 import { filteredBoard, isFiltering } from "./filters";
 import { DueBadge, Icon, IconButton, TagRow, alpha } from "./ui";
 import { theme, TYPE } from "./theme";
@@ -168,16 +168,49 @@ function CardView(props: { card: () => Card; selected: boolean; onSelect: () => 
       }}
     >
       <View style={{ flexDirection: "row", gap: 7 }}>
-        {settled() ? (
-          <View style={{ paddingTop: 3 }}>
+        {/* The circle every card carries, finished or not: the phone completes a
+            row with one tap and the Mac had no way to do it without opening the
+            card and pressing a chip. An open card is a hollow ring in tertiary
+            ink — nothing coloured, because colour here means a tag, a due time
+            or a finished card — and a finished one keeps the check it always
+            had. The box is the same size either way, so titles line up across
+            the column instead of stepping in where a check appears. */}
+        <View
+          testID={`check-${card().id}`}
+          onPress={() => setStatus(card().id, settled() ? "todo" : "done")}
+          role="checkbox"
+          accessibilityLabel={settled() ? "标记为未完成" : "标记为已完成"}
+          accessibilityState={{ checked: settled() }}
+          hitSlop={6}
+          activeStyle={{ opacity: 0.45 }}
+          style={{
+            width: 22,
+            height: 22,
+            marginLeft: -6,
+            marginTop: -1,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          {settled() ? (
             <Icon
               name="check"
               size={12}
               tint={card().status === "done" ? theme().ok : theme().textTertiary}
               width={2.2}
             />
-          </View>
-        ) : null}
+          ) : (
+            <View
+              style={{
+                width: 13,
+                height: 13,
+                borderRadius: 6.5,
+                borderWidth: 1.4,
+                borderColor: alpha(theme().textTertiary, 0.85),
+              }}
+            />
+          )}
+        </View>
         <Text
           style={{
             ...TYPE.cardTitle,
