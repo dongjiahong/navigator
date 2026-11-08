@@ -1,4 +1,4 @@
-import { COLUMNS, type Card, type Tag } from "./data";
+import { byRank, COLUMNS, type Card, type Tag } from "./data";
 
 /**
  * What changed, and what has not.
@@ -13,9 +13,17 @@ import { COLUMNS, type Card, type Tag } from "./data";
  * Pure functions over the lists, so they can be tested without a store.
  */
 
-/** A row's identity for "did this change". */
+/**
+ * A row's identity for "did this change".
+ *
+ * The stamp, the tombstone, and the card's rank. A rank is data the other device
+ * has to see, so a card that was only renumbered is a change; and a card that
+ * was only numbered for the first time — the migration, which deliberately does
+ * not touch `updatedAt` — still has to reach the file once.
+ */
 export function stampOf(row: Card | Tag): string {
-  return `${row.updatedAt ?? 0}:${row.deleted ? 1 : 0}`;
+  const rank = (row as Card).rank;
+  return `${row.updatedAt ?? 0}:${row.deleted ? 1 : 0}:${rank ?? ""}`;
 }
 
 /**
@@ -34,13 +42,19 @@ export function changed<T extends Card | Tag>(all: readonly T[], seen: Map<strin
   return out;
 }
 
-/** A column's live cards, ids in the order the board shows them. */
+/**
+ * A column's live cards, ids in the order the board shows them.
+ *
+ * Sorted by rank, not by the array's order: the order a column shows is its
+ * cards' ranks, so the order written to the file is the order the other device
+ * will show. Reading the array instead would write whatever order this device's
+ * list happened to be in — the bug that made the phone show another order than
+ * the Mac it synced with.
+ */
 export function orderOf(all: readonly Card[], status: string): string {
-  const out: string[] = [];
-  for (const card of all) {
-    if (card.status === status && !card.deleted) out.push(card.id);
-  }
-  return out.join(",");
+  const ids: string[] = [];
+  for (const card of all.filter((c) => c.status === status && !c.deleted).sort(byRank)) ids.push(card.id);
+  return ids.join(",");
 }
 
 /**

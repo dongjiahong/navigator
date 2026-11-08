@@ -8,10 +8,14 @@
 //!   shape, so adding a field there must not be a database migration; the stamp
 //!   and the status are duplicated out because a merge and a load both need them
 //!   without parsing every row.
-//! + **`ord` is local.** A table has no order, so the order within a column is
-//!   stored with the row. It is written when a card moves, never merged: the
-//!   order each device sees is its own, which is what the interface already did
-//!   with arrays.
+//! + **A card is merged per field, not overwritten.** The row already stored and
+//!   the incoming copy are put together by `merge_cards`, the same rule the
+//!   interface runs: the newer of each field wins, so a title typed on the Mac
+//!   and a 完成 pressed on the phone both survive. `merge-cases.json` holds the
+//!   cases both implementations are run against.
+//! + **`ord` is a cache.** A column's order is its cards' `rank`, which travels
+//!   with the card to the other device; `ord` is only the fallback for a card
+//!   written before a column had a rank, and a load sorts by rank regardless.
 //! + **`meta.seeded`** separates "first run" from "the user deleted every card":
 //!   only the first may fill the board with the sample cards.
 
@@ -100,10 +104,107 @@ pub fn with<R>(f: impl FnOnce(&mut Db) -> Result<R, String>) -> Result<R, String
 
 /// A card's or tag's stamp, 0 for one that has none.
 pub fn stamp(item: &Value) -> i64 {
-    item.get("updatedAt")
-        .and_then(Value::as_i64)
-        .or_else(|| item.get("updatedAt").and_then(Value::as_f64).map(|f| f as i64))
-        .unwrap_or(0)
+    match item.get("updatedAt") {
+        Some(Value::Number(n)) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)).unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// The fields a card is merged on, one at a time. Kept in step with
+/// `app/fields.ts`: `id` is the key rather than a value, and everything else a
+/// card holds — including `deleted` and `rank` — is a field both devices may
+/// have written.
+const MERGE_FIELDS: [&str; 7] = ["title", "notes", "tags", "due", "status", "deleted", "rank"];
+
+/// When one field of a card was last written.
+///
+/// A card written before fields had stamps of their own has only `updatedAt`,
+/// and that is the answer for all of its fields: the older format merges
+/// exactly as it did, and the first write to a field gives it the stamp it
+/// should have had.
+fn field_stamp(card: &Value, field: &str) -> i64 {
+    match card.get("stamps").and_then(|s| s.get(field)) {
+        Some(Value::Number(n)) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)).unwrap_or_else(|| stamp(card)),
+        _ => stamp(card),
+    }
+}
+
+/// One field's value, `null` for a field the card does not have.
+fn field_value(card: &Value, field: &str) -> Value {
+    match field {
+        // Absent and `false` are the same card: a merge that told them apart
+        // would hand every card a first edit it never had.
+        "deleted" => Value::Bool(card.get("deleted").and_then(Value::as_bool).unwrap_or(false)),
+        _ => card.get(field).cloned().unwrap_or(Value::Null),
+    }
+}
+
+/// A value as the text the tie between two equal stamps is decided on.
+///
+/// Both implementations agree on the text because a field here is a string, a
+/// boolean, a number or a list of strings: each prints a whole number without a
+/// decimal point, and a list in its own order. The interface's `tieKey` is the
+/// same rule, and `merge-cases.json` holds the cases both are run against.
+fn tie_key(value: &Value) -> String {
+    value.to_string()
+}
+
+/// Whether `a` is the value a tie is decided on.
+///
+/// The interface compares the two texts with JavaScript's `>=`, which orders by
+/// UTF-16 code unit. Comparing them as UTF-8 bytes would agree on every
+/// character of the basic plane and disagree above it, where an emoji lives —
+/// and a title with an emoji in it is not a rare title.
+fn tie_wins(a: &Value, b: &Value) -> bool {
+    let (x, y) = (tie_key(a), tie_key(b));
+    x.encode_utf16().cmp(y.encode_utf16()) != std::cmp::Ordering::Less
+}
+
+/// Two copies of one card, reconciled per field — the same rule the interface's
+/// `mergeCard` runs, because the Mac merges what the phone sends before it
+/// answers it.
+///
+/// The field is taken from whichever copy wrote it last, and a field both wrote
+/// at the same millisecond is decided by the larger JSON text of the two values,
+/// so the answer does not depend on which device asks. `updatedAt` of the result
+/// is the newest thing on either copy.
+pub fn merge_cards(a: &Value, b: &Value) -> Value {
+    let newer = if stamp(b) > stamp(a) { b } else { a };
+    let mut merged = newer.as_object().cloned().unwrap_or_default();
+    let mut stamps = Map::new();
+    let mut newest = stamp(a).max(stamp(b));
+
+    for field in MERGE_FIELDS {
+        let sa = field_stamp(a, field);
+        let sb = field_stamp(b, field);
+        let (value, chosen) = if sa > sb {
+            (field_value(a, field), sa)
+        } else if sb > sa {
+            (field_value(b, field), sb)
+        } else {
+            let va = field_value(a, field);
+            let vb = field_value(b, field);
+            if tie_wins(&va, &vb) {
+                (va, sa)
+            } else {
+                (vb, sb)
+            }
+        };
+        // An absent field stays absent rather than becoming `null`: the card is
+        // written back to the file and to the other device as it would have
+        // been without it.
+        if value.is_null() {
+            merged.remove(field);
+        } else {
+            merged.insert(field.to_owned(), value);
+        }
+        stamps.insert(field.to_owned(), json!(chosen));
+        newest = newest.max(chosen);
+    }
+
+    merged.insert("stamps".to_owned(), Value::Object(stamps));
+    merged.insert("updatedAt".to_owned(), json!(newest));
+    Value::Object(merged)
 }
 
 fn id_of(item: &Value) -> Option<&str> {
@@ -130,21 +231,37 @@ pub fn upsert(conn: &mut Connection, cards: &[Value], tags: &[Value]) -> Result<
     Ok(changed)
 }
 
+/// Writes one card, merging it into the row already stored under its id.
+///
+/// The row is not overwritten: the stored copy and the incoming one are put
+/// together field by field by `merge_cards`, which is the same rule the
+/// interface runs. That is what lets the Mac change a title while the phone
+/// presses 完成 on the same card — both writes are in the file afterwards.
 fn upsert_card(tx: &Transaction, card: &Value) -> Result<usize, String> {
-    let id = id_of(card).ok_or_else(|| "a card without an id".to_owned())?;
-    let status = text_of(card, "status");
-    let status = if status.is_empty() { "todo".to_owned() } else { status };
-    let deleted = card.get("deleted").and_then(Value::as_bool).unwrap_or(false) as i64;
-    // A card that changed column joins the end of its new column; one that only
-    // changed its text keeps the place the user put it in.
-    let existing: Option<(i64, String)> = tx
-        .query_row("SELECT ord, status FROM cards WHERE id = ?1", [id], |r| {
-            Ok((r.get(0)?, r.get(1)?))
+    let id = id_of(card).ok_or_else(|| "a card without an id".to_owned())?.to_owned();
+    let stored: Option<(String, i64, String)> = tx
+        .query_row("SELECT body, ord, status FROM cards WHERE id = ?1", [&id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })
         .optional()
         .map_err(failed)?;
-    let ord = match existing {
-        Some((ord, was)) if was == status => ord,
+    // A row that does not parse is corruption: the incoming copy stands on its
+    // own rather than losing the write.
+    let card = match &stored {
+        Some((body, _, _)) => match serde_json::from_str::<Value>(body) {
+            Ok(was) => merge_cards(&was, card),
+            Err(_) => card.clone(),
+        },
+        None => card.clone(),
+    };
+    let status = text_of(&card, "status");
+    let status = if status.is_empty() { "todo".to_owned() } else { status };
+    let deleted = card.get("deleted").and_then(Value::as_bool).unwrap_or(false) as i64;
+    // A card that changed column joins the end of its new column; one that only
+    // changed its text keeps the place the user put it in. (`ord` is a cache now
+    // that a column's order is its cards' ranks — a load sorts by rank.)
+    let ord = match stored {
+        Some((_, ord, was)) if was == status => ord,
         _ => next_ord(tx, "cards", Some(&status))?,
     };
     tx.execute(
@@ -153,7 +270,7 @@ fn upsert_card(tx: &Transaction, card: &Value) -> Result<usize, String> {
          ON CONFLICT(id) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at,
              status = excluded.status, deleted = excluded.deleted, ord = excluded.ord
          WHERE excluded.updated_at >= cards.updated_at",
-        params![id, card.to_string(), stamp(card), status, deleted, ord],
+        params![id, card.to_string(), stamp(&card), status, deleted, ord],
     )
     .map_err(failed)
 }
@@ -261,13 +378,49 @@ fn bodies(conn: &Connection, sql: &str, since: Option<i64>) -> Result<Vec<Value>
         .collect())
 }
 
+/// A card's column, counted the way the SQL's own `RANK` expression counts it.
+fn column_of(card: &Value) -> u8 {
+    match card.get("status").and_then(Value::as_str).unwrap_or("todo") {
+        "todo" => 0,
+        "doing" => 1,
+        "done" => 2,
+        "archive" => 3,
+        _ => 4,
+    }
+}
+
+/// A card's place in its column, `None` for a card written before a column had
+/// a rank.
+fn rank_of(card: &Value) -> Option<f64> {
+    card.get("rank").and_then(Value::as_f64)
+}
+
+/// Puts cards in the order a column shows them: by column, then by rank.
+///
+/// A card with no rank keeps the place the store gave it — the sort is stable,
+/// and the query already comes back in column and `ord` order. `ord` is only
+/// that fallback now: the order itself is the ranks, which both devices carry,
+/// so a column read back here is the column the user arranged anywhere.
+fn sort_by_rank(cards: &mut [Value]) {
+    cards.sort_by(|a, b| {
+        let (ca, cb) = (column_of(a), column_of(b));
+        if ca != cb {
+            return ca.cmp(&cb);
+        }
+        let ra = rank_of(a).unwrap_or(f64::INFINITY);
+        let rb = rank_of(b).unwrap_or(f64::INFINITY);
+        ra.partial_cmp(&rb).unwrap_or(std::cmp::Ordering::Equal)
+    });
+}
+
 /// The whole document, in board order.
 pub fn all(conn: &Connection) -> Result<String, String> {
-    let cards = bodies(
+    let mut cards = bodies(
         conn,
         &format!("SELECT body FROM cards ORDER BY {RANK}, ord, id"),
         None,
     )?;
+    sort_by_rank(&mut cards);
     let tags = bodies(conn, "SELECT body FROM tags ORDER BY ord, id", None)?;
     Ok(json!({ "cards": cards, "tags": tags, "seeded": seeded(conn)? }).to_string())
 }
@@ -275,11 +428,12 @@ pub fn all(conn: &Connection) -> Result<String, String> {
 /// Everything stamped at or after `since`, plus the newest stamp the board
 /// holds. A tie is re-sent rather than risked, so the comparison is inclusive.
 pub fn rows_since(conn: &Connection, since: i64) -> Result<String, String> {
-    let cards = bodies(
+    let mut cards = bodies(
         conn,
         &format!("SELECT body FROM cards WHERE updated_at >= ?1 ORDER BY {RANK}, ord, id"),
         Some(since),
     )?;
+    sort_by_rank(&mut cards);
     let tags = bodies(
         conn,
         "SELECT body FROM tags WHERE updated_at >= ?1 ORDER BY ord, id",
@@ -384,6 +538,119 @@ mod tests {
         upsert(&mut conn, &[card("a", 20, json!({"title": "back?"}))], &[]).unwrap();
         let board = loaded(&conn);
         assert_eq!(board["cards"][0]["deleted"], true);
+    }
+
+    /// The cases the interface's merge is run against, run here too.
+    ///
+    /// The Mac merges what the phone sends before it answers it, so the two
+    /// implementations are the same rule twice. They share this file rather than
+    /// each keeping its own idea of it: a case added for one is a case the other
+    /// has to pass. Both argument orders are checked, because the device that
+    /// asks must not change the answer.
+    #[test]
+    fn the_shared_cases_merge_the_same_in_both_implementations() {
+        let raw = include_str!("../merge-cases.json");
+        let cases: Value = serde_json::from_str(raw).unwrap();
+        let cases = cases["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let (a, b) = (&case["a"], &case["b"]);
+            assert_eq!(merge_cards(a, b), case["merged"], "case: {}", case["name"]);
+            assert_eq!(merge_cards(b, a), case["merged"], "case (swapped): {}", case["name"]);
+        }
+    }
+
+    /// The write the whole change is for: a title written on one device and a
+    /// status written on the other, arriving at the store one after the other,
+    /// both land on the card.
+    #[test]
+    fn a_title_and_a_status_from_two_devices_both_survive() {
+        let mut conn = store();
+        // The phone presses 完成 at 20; the Mac types a title at 30.
+        upsert(
+            &mut conn,
+            &[card(
+                "a",
+                20,
+                json!({"status": "done", "stamps": {"title": 1, "status": 20, "notes": 1}}),
+            )],
+            &[],
+        )
+        .unwrap();
+        upsert(
+            &mut conn,
+            &[card("a", 30, json!({"title": "Mac typed this", "stamps": {"title": 30, "status": 1}}))],
+            &[],
+        )
+        .unwrap();
+        let board = loaded(&conn);
+        assert_eq!(board["cards"][0]["title"], "Mac typed this");
+        assert_eq!(board["cards"][0]["status"], "done");
+        assert_eq!(board["cards"][0]["updatedAt"], 30);
+    }
+
+    /// A field written on the other device and a field written here are two
+    /// writes, so the row's own stamp has to move to the newest of them — it is
+    /// what `rows_since` gives the phone.
+    #[test]
+    fn a_field_merge_moves_the_row_stamp() {
+        let mut conn = store();
+        upsert(&mut conn, &[card("a", 10, json!({"title": "old", "stamps": {"title": 10}}))], &[]).unwrap();
+        upsert(
+            &mut conn,
+            &[card("a", 40, json!({"title": "old", "notes": "new", "stamps": {"title": 10, "notes": 40}}))],
+            &[],
+        )
+        .unwrap();
+        let board = loaded(&conn);
+        assert_eq!(board["cards"][0]["title"], "old");
+        assert_eq!(board["cards"][0]["notes"], "new");
+        assert_eq!(board["cards"][0]["updatedAt"], 40);
+        let fresh: Value = serde_json::from_str(&rows_since(&conn, 30).unwrap()).unwrap();
+        assert_eq!(fresh["cards"].as_array().unwrap().len(), 1);
+        assert_eq!(fresh["cards"][0]["id"], "a");
+    }
+
+    /// A tombstone is a field too: a note written on the other device after the
+    /// delete is kept inside it, and the card stays removed.
+    #[test]
+    fn a_delete_keeps_the_note_written_after_it() {
+        let mut conn = store();
+        upsert(&mut conn, &[card("a", 10, json!({"deleted": true, "stamps": {"deleted": 10}}))], &[]).unwrap();
+        // The phone did not know about the delete: its copy still says the card
+        // is live, on the stamp it was made with, and writes a note after it.
+        upsert(
+            &mut conn,
+            &[card("a", 20, json!({"title": "a", "notes": "写下的备注", "stamps": {"deleted": 1, "notes": 20}}))],
+            &[],
+        )
+        .unwrap();
+        let board = loaded(&conn);
+        assert_eq!(board["cards"][0]["deleted"], true);
+        assert_eq!(board["cards"][0]["notes"], "写下的备注");
+    }
+
+    /// A column read back is in rank order, not in the order rows happen to sit
+    /// in the table: the order is the cards' own, and it came from the other
+    /// device with them.
+    #[test]
+    fn a_load_comes_back_in_rank_order() {
+        let mut conn = store();
+        upsert(
+            &mut conn,
+            &[
+                card("a", 1, json!({"rank": 3000})),
+                card("b", 2, json!({"rank": 1000})),
+                card("c", 3, json!({"rank": 2000})),
+            ],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(titles(&loaded(&conn)), ["b", "c", "a"]);
+        // A card with no rank keeps the place the store gave it, after the ones
+        // that have one.
+        upsert(&mut conn, &[card("d", 4, json!({}))], &[]).unwrap();
+        assert_eq!(titles(&loaded(&conn)), ["b", "c", "a", "d"]);
     }
 
     #[test]

@@ -1,7 +1,11 @@
-import { signal } from "nsh";
+import { computed, signal } from "nsh";
+import { allFields, fieldValue, MERGE_FIELDS, tieKey, type MergeField } from "./fields";
 import { HUES, type Hue } from "./theme";
 
 export type Status = "todo" | "doing" | "done" | "archive";
+
+/** When each field of a card was last written. See `fields.ts`. */
+export type Stamps = Partial<Record<MergeField, number>>;
 
 export type Card = {
   id: string;
@@ -12,10 +16,24 @@ export type Card = {
   due?: string;
   status: Status;
   /**
-   * Millis of the last write. Sync merges per card by this, so the newer edit
-   * always wins no matter which device was offline and for how long.
+   * Where the card sits in its column, ascending. It is data, not a local
+   * detail: the order the Mac puts a column in is the order the phone shows, so
+   * a move has to reach the other device like any other edit.
+   */
+  rank?: number;
+  /**
+   * Millis of the last write, and the newest of the field stamps below — the
+   * card as a whole. `changed`, `since` and the row's own column read it, so a
+   * write to any field still moves it.
    */
   updatedAt: number;
+  /**
+   * Millis each field was last written. A field the other device has not
+   * touched keeps the copy it had, so a title typed here and a 完成 pressed
+   * there both survive the merge. Absent on a card written before fields were
+   * stamped one at a time: every field then counts as written at `updatedAt`.
+   */
+  stamps?: Stamps;
   /**
    * A removed card stays as a tombstone. Dropping it outright would let the
    * other device push its copy back on the next merge.
@@ -397,47 +415,196 @@ export function removeTag(id: string) {
   const stamp = now();
   tags.update((all) => all.map((t) => (t.id === id ? { ...t, deleted: true, updatedAt: stamp } : t)));
   cards.update((all) =>
-    all.map((c) =>
-      c.tags.includes(id) ? { ...c, tags: c.tags.filter((x) => x !== id), updatedAt: stamp } : c,
-    ),
+    all.map((c) => {
+      if (!c.tags.includes(id)) return c;
+      const next = { ...c, tags: c.tags.filter((x) => x !== id) };
+      // The strip is a write to the card's `tags` field and to nothing else, so
+      // it is stamped that way: a card whose title was edited on the other
+      // device keeps the title.
+      return stamped(c, next, stamp) ?? c;
+    }),
   );
 }
 
+/**
+ * A card as written, or `null` when the write changed nothing.
+ *
+ * The fields whose value really moved get the stamp; a field the write repeated
+ * keeps the stamp it had. That is the whole of "do not claim an edit you did
+ * not make": a title typed here leaves `status` stamped where it was, so the
+ * 完成 pressed on the phone an hour later still wins the field.
+ *
+ * `updatedAt` moves to the write whenever any field did, so the row-level
+ * answers — what to save, what to send, what has arrived since a stamp — keep
+ * meaning "this card changed" without knowing about fields at all.
+ */
+function stamped(card: Card, next: Card, stamp: number): Card | null {
+  let touched = false;
+  const stamps: Stamps = { ...(card.stamps ?? {}) };
+  for (const field of MERGE_FIELDS) {
+    if (sameValue(fieldValue(card, field), fieldValue(next, field))) continue;
+    stamps[field] = stamp;
+    touched = true;
+  }
+  return touched ? { ...next, stamps, updatedAt: stamp } : null;
+}
+
+/** Whether two field values are the same value: the text the merge ties on, so
+ *  "unchanged" here and "the same" there can never disagree. */
+function sameValue(a: unknown, b: unknown): boolean {
+  return tieKey(a) === tieKey(b);
+}
+
+/** How far apart two ranks are placed, and how close they must stay to be
+ *  halved again: a column renumbers itself rather than let a rank collide. */
+const STEP = 1000;
+const MIN_GAP = 1e-6;
+
+/** A card's rank, for a card written before a column had an order. The card may
+ *  be missing: it is read at the edge of a column, where there is no neighbour. */
+function rankOf(card: Card | undefined): number | undefined {
+  return typeof card?.rank === "number" ? card.rank : undefined;
+}
+
+/**
+ * Where a card goes when it enters a column: past the last one, in steps of
+ * `STEP`. A rank means "the place in this column", so a card changing column
+ * gets one here rather than carrying the place it held in the column it left.
+ */
+function endRank(all: readonly Card[], status: Status): number {
+  let max: number | undefined;
+  for (const card of all) {
+    if (card.deleted || card.status !== status) continue;
+    const rank = rankOf(card);
+    if (rank !== undefined) max = max === undefined ? rank : Math.max(max, rank);
+  }
+  return (max ?? 0) + STEP;
+}
+
+/**
+ * The order a column shows: rank ascending.
+ *
+ * A card with no rank — data from before a column had an order, or a card whose
+ * migration stamp lost a tie — keeps the place the array gives it: the sort is
+ * stable and two unranked cards compare equal. Two cards that carry the same
+ * rank are ordered by id, because two devices must show one order between them
+ * and a status pressed on the phone can land a card on a rank the column
+ * already holds.
+ */
+export function byRank(a: Card, b: Card): number {
+  const ra = rankOf(a);
+  const rb = rankOf(b);
+  if (ra === undefined || rb === undefined) return 0;
+  if (ra !== rb) return ra < rb ? -1 : 1;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/** Each column's place in the board, for a card whose status is not one of them. */
+const COLUMN_OF = new Map<Status, number>(COLUMNS.map((c, i) => [c.id, i]));
+
+/** The board in the order it shows: column by column, each by rank. */
+function sortBoard(all: readonly Card[]): Card[] {
+  return [...all].sort((a, b) => {
+    const ca = COLUMN_OF.get(a.status) ?? COLUMNS.length;
+    const cb = COLUMN_OF.get(b.status) ?? COLUMNS.length;
+    return ca !== cb ? ca - cb : byRank(a, b);
+  });
+}
+
 export function byStatus(status: Status): Card[] {
-  return cards().filter((c) => c.status === status);
+  return board().filter((c) => c.status === status);
 }
 
 export function addCard(partial: Pick<Card, "title" | "notes" | "tags" | "due">) {
   const id = newId("c");
   const stamp = now();
-  cards.update((all) => [
-    ...all,
-    { id, status: "todo", updatedAt: stamp, ...partial },
-  ]);
+  cards.update((all) => {
+    const created: Card = {
+      id,
+      status: "todo",
+      rank: endRank(all, "todo"),
+      // A card is written whole when it is made: every field is as new as the
+      // card, which is what lets two cards made at once on two devices still
+      // have a field each to lose.
+      stamps: allFields(stamp),
+      updatedAt: stamp,
+      ...partial,
+    };
+    return [...all, created];
+  });
   return id;
 }
 
 export function patchCard(id: string, patch: Partial<Card>) {
   const stamp = now();
-  cards.update((all) =>
-    all.map((c) => (c.id === id ? { ...c, ...patch, updatedAt: stamp } : c)),
-  );
+  cards.update((all) => {
+    const card = all.find((c) => c.id === id);
+    if (!card) return all;
+    const next = { ...card, ...patch };
+    // Entering a column takes a rank in it. A card keeps the place it had in
+    // the column it left only while it stays there.
+    if (patch.status !== undefined && patch.status !== card.status && patch.rank === undefined) {
+      next.rank = endRank(all.filter((c) => c.id !== id), patch.status);
+    }
+    const written = stamped(card, next, stamp);
+    return written ? all.map((c) => (c.id === id ? written : c)) : all;
+  });
 }
 
+/**
+ * Moves a card to a row of a column, by rank.
+ *
+ * `index` counts the cards the target column will hold around it — the card
+ * taken out first, as the board's own drop does. Its new rank is the midpoint
+ * of the two cards it lands between, so one move rewrites one card; a gap that
+ * has closed to nothing renumbers the column instead, because a rank has to
+ * stay a number both devices can compare.
+ */
 export function moveCard(id: string, status: Status, index: number) {
   const stamp = now();
   cards.update((all) => {
     const card = all.find((c) => c.id === id);
-    if (!card) return all;
+    if (!card || card.deleted) return all;
     const rest = all.filter((c) => c.id !== id);
-    const target = rest.filter((c) => c.status === status);
-    const before = rest.filter((c) => c.status !== status);
-    target.splice(Math.max(0, Math.min(index, target.length)), 0, {
-      ...card,
-      status,
-      updatedAt: stamp,
-    });
-    return [...before, ...target];
+    const column = rest.filter((c) => c.status === status && !c.deleted).sort(byRank);
+    const others = rest.filter((c) => !(c.status === status && !c.deleted));
+    const at = Math.max(0, Math.min(index, column.length));
+    const before = rankOf(column[at - 1]!);
+    const after = rankOf(column[at]!);
+
+    if (before !== undefined && after !== undefined && after - before < MIN_GAP) {
+      // No room left between the neighbours: the column takes fresh ranks in
+      // steps of `STEP`, and every card in it is stamped for it. Renumbering is
+      // an edit to the column's order, not a local tidy-up, so each card that
+      // moves is written and sent like any other change.
+      const placed = [...column.slice(0, at), card, ...column.slice(at)];
+      const renumbered = new Map<string, Card>();
+      placed.forEach((c, i) => {
+        const rank = STEP * (i + 1);
+        const next = { ...c, status, rank };
+        // Every card in the column is written here, not only the ones whose
+        // number moved: the column's order is the edit, and the first card of a
+        // renumbered column keeps the 1000 it already had.
+        renumbered.set(
+          c.id,
+          stamped(c, next, stamp) ?? { ...next, stamps: { ...c.stamps, rank: stamp }, updatedAt: stamp },
+        );
+      });
+      return [...others, ...placed.map((c) => renumbered.get(c.id)!)];
+    }
+
+    const rank =
+      before === undefined && after === undefined
+        ? STEP
+        : before === undefined
+          ? after! - STEP
+          : after === undefined
+            ? before + STEP
+            : (before + after) / 2;
+    const written = stamped(card, { ...card, status, rank }, stamp);
+    if (!written) return all;
+    column.splice(at, 0, written);
+    return [...others, ...column];
   });
 }
 
@@ -448,20 +615,64 @@ export function moveCard(id: string, status: Status, index: number) {
 export function removeCard(id: string) {
   const stamp = now();
   cards.update((all) =>
-    all.map((c) => (c.id === id ? { ...c, deleted: true, updatedAt: stamp } : c)),
+    all.map((c) => {
+      if (c.id !== id) return c;
+      return stamped(c, { ...c, deleted: true }, stamp) ?? c;
+    }),
   );
 }
 
 /**
  * Puts a removed card back. The tombstone kept every field, so a restore is
- * the same row with a fresh stamp — which is also what beats the tombstone on
- * the other device: undo is an ordinary edit, not a case in the merge.
+ * the same row with a fresh stamp on `deleted` — which is also what beats the
+ * tombstone on the other device: undo is an ordinary edit, not a case in the
+ * merge.
  */
 export function restoreCard(id: string) {
   const stamp = now();
   cards.update((all) =>
-    all.map((c) => (c.id === id ? { ...c, deleted: false, updatedAt: stamp } : c)),
+    all.map((c) => {
+      if (c.id !== id) return c;
+      return stamped(c, { ...c, deleted: false }, stamp) ?? c;
+    }),
   );
+}
+
+/**
+ * Gives every card that has no `rank` one, in the order it is already in.
+ *
+ * A board written before a column had a rank shows its order only as the array
+ * the file happened to come back in, which is not something the other device
+ * can see. The migration writes that order down as numbers — 1000, 2000, … per
+ * column — with the **lowest** stamp a field can carry, so any real move beats
+ * it and no card looks edited for having been numbered.
+ *
+ * Two devices migrating the same board reach the same numbers only if they agree
+ * on the order they were showing, and they may not: the phone's file and the
+ * Mac's can list a column differently. Where they disagree the merge takes the
+ * larger value once and both boards are the same from then on — the user's next
+ * move settles the rest. The inconsistency is one launch wide, and it is a
+ * column that had no order to lose.
+ *
+ * Returns `null` when every card already has a rank, so an ordinary launch
+ * writes nothing.
+ */
+export function seedRanks(all: readonly Card[]): Card[] | null {
+  if (all.every((c) => rankOf(c) !== undefined)) return null;
+  const out = [...all];
+  for (const column of COLUMNS) {
+    let next = endRank(out, column.id);
+    for (const card of out) {
+      if (card.status !== column.id || rankOf(card) !== undefined) continue;
+      // The cards on the board are given their rank, not copied: a board of new
+      // objects a moment after it opened rebuilds every cell, and a cell that is
+      // rebuilt under a gesture drops it. Only the array is new.
+      card.rank = next;
+      card.stamps = { ...card.stamps, rank: 0 };
+      next += STEP;
+    }
+  }
+  return out;
 }
 
 /**
@@ -545,10 +756,13 @@ export function setStatus(id: string, status: Status): void {
   const card = cards().find((c) => c.id === id && !c.deleted);
   if (!card || card.status === status) return;
   const before = card.status;
+  // The row it held in the column it is leaving, so the way back puts it where
+  // it was rather than at the foot of the column.
+  const row = cards().filter((c) => c.status === before && !c.deleted).sort(byRank).findIndex((c) => c.id === id);
   patchCard(id, { status });
   if (status !== "done" && status !== "archive") return;
   offerUndo(`${status === "archive" ? "已归档" : "已完成"}「${nameOf(card)}」`, () =>
-    patchCard(id, { status: before }),
+    moveCard(id, before, Math.max(0, row)),
   );
 }
 
@@ -606,9 +820,23 @@ export function startAutoArchive(): void {
   setInterval(() => archiveStaleDone(), HOUR_MS);
 }
 
-/** The board as it shows: no tombstones. Views read this, never `cards`. */
+/**
+ * The board as it shows: no tombstones, column by column, each column in rank
+ * order.
+ *
+ * The sort lives here and nowhere else. Every view narrows this list by status,
+ * a filter or a search, and a narrowed list keeps the order it came from — so
+ * the Mac's columns, the phone's pages, the keyboard's cursor and the geometry
+ * a drag drops against all read one order, instead of each trusting the order
+ * the array happened to be in.
+ *
+ * It is a `computed`, so a board of a thousand cards is sorted once per change
+ * rather than once per cell.
+ */
+const shownBoard = computed(() => sortBoard(liveCards(cards())));
+
 export function board(): Card[] {
-  return liveCards(cards());
+  return shownBoard();
 }
 
 /**
