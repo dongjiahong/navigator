@@ -11,10 +11,13 @@
 //!
 //! Two rules keep the merge honest:
 //!
-//! - **Last write wins, per card, by `updatedAt`.** A phone that was in a
-//!   tunnel for an hour cannot overwrite an edit the Mac made since.
+//! - **The newer write of each field wins.** A card is reconciled field by
+//!   field (`board::merge_cards`), so a title typed on the Mac and a 完成
+//!   pressed on the phone in the same minute both land on the card. `updatedAt`
+//!   is the newest field stamp, which is what orders the exchange.
 //! - **Deletes are tombstones.** A card removed on the Mac comes back as
-//!   `deleted: true` with a newer `updatedAt`, so merging cannot resurrect it.
+//!   `deleted: true` with a newer stamp, so merging cannot resurrect it; an
+//!   undo writes `deleted: false` with a newer stamp still, and that does.
 //!
 //! A device sends only what changed since the last exchange, and gets back only
 //! what it is missing: `POST /state` carries `{ cards, tags, since }` and

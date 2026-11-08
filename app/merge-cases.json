@@ -1,0 +1,309 @@
+{
+  "note": "Two copies of one card, and what the merge makes of them. This file is the contract between the two implementations of the rule: the interface's `mergeCard` (app/merge.ts) and the crate's `merge_cards` (app/src/board.rs). Each case is run by both, in both argument orders, so the two cannot drift.",
+  "cases": [
+    {
+      "name": "两边改了不同的字段，两个改动都留下",
+      "a": {
+        "id": "c1",
+        "title": "Mac 改的标题",
+        "notes": "旧备注",
+        "tags": ["work"],
+        "due": "2026-11-12T14:00",
+        "status": "todo",
+        "rank": 1000,
+        "deleted": false,
+        "updatedAt": 20,
+        "stamps": { "title": 20, "notes": 1, "tags": 1, "due": 1, "status": 1, "rank": 1, "deleted": 1 }
+      },
+      "b": {
+        "id": "c1",
+        "title": "旧标题",
+        "notes": "手机改的备注",
+        "tags": ["work"],
+        "due": "2026-11-12T14:00",
+        "status": "todo",
+        "rank": 1000,
+        "deleted": false,
+        "updatedAt": 30,
+        "stamps": { "title": 1, "notes": 30, "tags": 1, "due": 1, "status": 1, "rank": 1, "deleted": 1 }
+      },
+      "merged": {
+        "id": "c1",
+        "title": "Mac 改的标题",
+        "notes": "手机改的备注",
+        "tags": ["work"],
+        "due": "2026-11-12T14:00",
+        "status": "todo",
+        "rank": 1000,
+        "deleted": false,
+        "updatedAt": 30,
+        "stamps": { "title": 20, "notes": 30, "tags": 1, "due": 1, "status": 1, "rank": 1, "deleted": 1 }
+      }
+    },
+    {
+      "name": "两边改同一个字段，新的那个留下",
+      "a": {
+        "id": "c2",
+        "title": "较早的标题",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "updatedAt": 15,
+        "stamps": { "title": 10, "notes": 1, "tags": 1, "status": 1, "deleted": 1 }
+      },
+      "b": {
+        "id": "c2",
+        "title": "较晚的标题",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "updatedAt": 20,
+        "stamps": { "title": 20, "notes": 1, "tags": 1, "status": 1, "deleted": 1 }
+      },
+      "merged": {
+        "id": "c2",
+        "title": "较晚的标题",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "deleted": false,
+        "updatedAt": 20,
+        "stamps": { "title": 20, "notes": 1, "tags": 1, "due": 20, "status": 1, "deleted": 1, "rank": 20 }
+      }
+    },
+    {
+      "name": "戳相同而值不同时，文本大的那个胜，两端都这样",
+      "a": {
+        "id": "c3",
+        "title": "标题 A",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "updatedAt": 5,
+        "stamps": { "title": 5, "notes": 5, "tags": 5, "status": 5, "deleted": 5 }
+      },
+      "b": {
+        "id": "c3",
+        "title": "标题 B",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "updatedAt": 5,
+        "stamps": { "title": 5, "notes": 5, "tags": 5, "status": 5, "deleted": 5 }
+      },
+      "merged": {
+        "id": "c3",
+        "title": "标题 B",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "deleted": false,
+        "updatedAt": 5,
+        "stamps": { "title": 5, "notes": 5, "tags": 5, "due": 5, "status": 5, "deleted": 5, "rank": 5 }
+      }
+    },
+    {
+      "name": "没有字段戳的旧卡，每个字段按它自己的 updatedAt 算",
+      "a": {
+        "id": "c4",
+        "title": "旧的写法",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "updatedAt": 10
+      },
+      "b": {
+        "id": "c4",
+        "title": "新的写法",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "updatedAt": 20
+      },
+      "merged": {
+        "id": "c4",
+        "title": "新的写法",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "deleted": false,
+        "updatedAt": 20,
+        "stamps": { "title": 20, "notes": 20, "tags": 20, "due": 20, "status": 20, "deleted": 20, "rank": 20 }
+      }
+    },
+    {
+      "name": "删除戳更晚：卡片还是删除的，但对方写的备注留在墓碑里",
+      "a": {
+        "id": "c5",
+        "title": "要删的卡",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "rank": 500,
+        "deleted": true,
+        "updatedAt": 30,
+        "stamps": { "title": 1, "notes": 1, "tags": 1, "status": 1, "rank": 1, "deleted": 30 }
+      },
+      "b": {
+        "id": "c5",
+        "title": "要删的卡",
+        "notes": "手机上写的备注",
+        "tags": [],
+        "status": "done",
+        "rank": 500,
+        "deleted": false,
+        "updatedAt": 20,
+        "stamps": { "title": 1, "notes": 20, "tags": 1, "status": 20, "rank": 1, "deleted": 1 }
+      },
+      "merged": {
+        "id": "c5",
+        "title": "要删的卡",
+        "notes": "手机上写的备注",
+        "tags": [],
+        "status": "done",
+        "rank": 500,
+        "deleted": true,
+        "updatedAt": 30,
+        "stamps": { "title": 1, "notes": 20, "tags": 1, "due": 30, "status": 20, "rank": 1, "deleted": 30 }
+      }
+    },
+    {
+      "name": "编辑戳更晚也不会把删掉的卡片叫回来，只有恢复才会",
+      "a": {
+        "id": "c6",
+        "title": "删掉的卡",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "deleted": true,
+        "updatedAt": 10,
+        "stamps": { "title": 1, "notes": 1, "tags": 1, "status": 1, "deleted": 10 }
+      },
+      "b": {
+        "id": "c6",
+        "title": "删掉的卡",
+        "notes": "删掉之后又写的备注",
+        "tags": [],
+        "status": "todo",
+        "deleted": false,
+        "updatedAt": 20,
+        "stamps": { "title": 1, "notes": 20, "tags": 1, "status": 1, "deleted": 1 }
+      },
+      "merged": {
+        "id": "c6",
+        "title": "删掉的卡",
+        "notes": "删掉之后又写的备注",
+        "tags": [],
+        "status": "todo",
+        "deleted": true,
+        "updatedAt": 20,
+        "stamps": { "title": 1, "notes": 20, "tags": 1, "due": 20, "status": 1, "deleted": 10, "rank": 20 }
+      }
+    },
+    {
+      "name": "撤销删除写一个新的 deleted 戳，赢过墓碑",
+      "a": {
+        "id": "c7",
+        "title": "又回来了",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "deleted": true,
+        "updatedAt": 10,
+        "stamps": { "title": 1, "notes": 1, "tags": 1, "status": 1, "deleted": 10 }
+      },
+      "b": {
+        "id": "c7",
+        "title": "又回来了",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "deleted": false,
+        "updatedAt": 40,
+        "stamps": { "title": 1, "notes": 1, "tags": 1, "status": 1, "deleted": 40 }
+      },
+      "merged": {
+        "id": "c7",
+        "title": "又回来了",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "deleted": false,
+        "updatedAt": 40,
+        "stamps": { "title": 1, "notes": 1, "tags": 1, "due": 40, "status": 1, "deleted": 40, "rank": 40 }
+      }
+    },
+    {
+      "name": "同一时刻两端各新建一张同 id 的卡：取一个确定的，不崩",
+      "a": {
+        "id": "c8",
+        "title": "Mac 上的新卡",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "rank": 1000,
+        "deleted": false,
+        "updatedAt": 7,
+        "stamps": { "title": 7, "notes": 7, "tags": 7, "status": 7, "rank": 7, "deleted": 7 }
+      },
+      "b": {
+        "id": "c8",
+        "title": "手机上的新卡",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "rank": 2000,
+        "deleted": false,
+        "updatedAt": 7,
+        "stamps": { "title": 7, "notes": 7, "tags": 7, "status": 7, "rank": 7, "deleted": 7 }
+      },
+      "merged": {
+        "id": "c8",
+        "title": "手机上的新卡",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "rank": 2000,
+        "deleted": false,
+        "updatedAt": 7,
+        "stamps": { "title": 7, "notes": 7, "tags": 7, "due": 7, "status": 7, "rank": 7, "deleted": 7 }
+      }
+    },
+    {
+      "name": "列内顺序也是一格：只搬了位置的卡片，位置跟着走",
+      "a": {
+        "id": "c9",
+        "title": "被拖到最前面的卡",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "rank": 500,
+        "deleted": false,
+        "updatedAt": 60,
+        "stamps": { "title": 1, "notes": 1, "tags": 1, "status": 1, "rank": 60, "deleted": 1 }
+      },
+      "b": {
+        "id": "c9",
+        "title": "被拖到最前面的卡",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "rank": 3000,
+        "deleted": false,
+        "updatedAt": 50,
+        "stamps": { "title": 1, "notes": 1, "tags": 1, "status": 1, "rank": 50, "deleted": 1 }
+      },
+      "merged": {
+        "id": "c9",
+        "title": "被拖到最前面的卡",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "rank": 500,
+        "deleted": false,
+        "updatedAt": 60,
+        "stamps": { "title": 1, "notes": 1, "tags": 1, "due": 60, "status": 1, "rank": 60, "deleted": 1 }
+      }
+    }
+  ]
+}

@@ -63,6 +63,18 @@ test("a column is written whole, and only the column that moved", () => {
   expect(orderChanges(moved, seen)).toEqual({ todo: ["b", "a"] });
 });
 
+test("a card that was only numbered for the first time is a change", () => {
+  // The migration writes a rank without touching `updatedAt` — the lowest stamp
+  // a field can carry — so the row stamp alone would never report it, and the
+  // column's order would live on this device only.
+  const seen = new Map<string, string>();
+  const before = card("a", { updatedAt: 10 });
+  changed([before], seen, true);
+  expect(changed([{ ...before, rank: 1000, stamps: { rank: 0 } }], seen, true).map((c) => c.id)).toEqual(["a"]);
+  // A rank that did not move is not a change.
+  expect(changed([{ ...before, rank: 1000, stamps: { rank: 0 } }], seen, true)).toEqual([]);
+});
+
 test("a tag is a row like a card", () => {
   const seen = new Map<string, string>();
   const tag: Tag = { id: "work", label: "工作", hue: "blue", updatedAt: 5 };

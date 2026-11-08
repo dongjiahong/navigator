@@ -2,7 +2,7 @@ import { Storage, effect, lifecycle } from "nsh";
 import process from "process";
 import { Board } from "app/native";
 import { changed, forgetOrder, orderChanges, orderOf, stampOf } from "./changes";
-import { board, boardTags, COLUMNS, cards, tags, type Card, type Tag } from "./data";
+import { board, boardTags, COLUMNS, cards, seedRanks, tags, type Card, type Tag } from "./data";
 
 /**
  * The board's file, and the only place the interface writes it.
@@ -168,6 +168,13 @@ export async function hydrate(): Promise<void> {
     Board.save(JSON.stringify({ cards: cards(), tags: tags() }));
   }
   rememberBoard();
+  // A column's order is its cards' ranks, and a board written before that was
+  // true has none. Each card is given the place it already shows, with the
+  // lowest stamp a field can carry, so nothing looks edited for it and the
+  // user's next move beats it. It is one `cards.set`, so the debounce below
+  // writes the whole board once instead of a row at a time.
+  const ranked = seedRanks(cards());
+  if (ranked) cards.set(ranked);
   // The one line that answers "did this launch read the user's board or the
   // samples", which is otherwise impossible to tell from the window when the
   // board happens to look like the samples.
