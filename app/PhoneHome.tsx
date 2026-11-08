@@ -44,7 +44,10 @@ import {
   toggleTagFilter,
   type DueCondition,
 } from "./filters";
+import { notePreview, parseChecklist } from "./checklist";
 import {
+  ChecklistProgress,
+  ChecklistRows,
   DueBadge,
   DueEditor,
   Icon,
@@ -457,6 +460,10 @@ function PhoneRow(props: { card: () => Card }) {
   const dx = dragOf(c().id);
   const right = () => rowActions(c().status).right;
   const left = () => rowActions(c().status).left;
+  // One line of the note under the title, with a checklist's boxes taken off:
+  // the row is a glance, not an editor.
+  const preview = () => notePreview(c().notes);
+  const list = () => parseChecklist(c().notes);
   return (
     <View
       // The two writes as custom actions, for a screen reader that has no swipe
@@ -560,15 +567,19 @@ function PhoneRow(props: { card: () => Card }) {
           >
             {c().title || "未命名卡片"}
           </Text>
-          {c().notes ? (
+          {preview() ? (
             <Text style={{ fontSize: 13, lineHeight: 19, color: theme().textSecondary, numberOfLines: 1 }}>
-              {c().notes}
+              {preview()}
             </Text>
           ) : null}
-          {c().tags.length > 0 || c().due ? (
+          {c().tags.length > 0 || c().due || list().total > 0 ? (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 11, flexWrap: "wrap", marginTop: 1 }}>
               {c().tags.length > 0 ? <TagRow ids={c().tags} size="phone" /> : null}
               {c().due ? <DueBadge iso={c().due ?? ""} size="phone" settled={settled()} /> : null}
+              {c().due && c().repeat ? (
+                <Icon name="repeat" size={12.5} tint={theme().textTertiary} width={1.9} />
+              ) : null}
+              <ChecklistProgress notes={c().notes} size="phone" />
             </View>
           ) : null}
         </View>
@@ -894,6 +905,13 @@ function DetailBody(props: { id: string }) {
               of the field, so a press opens the browser instead of moving the
               caret. */}
           <NoteLinks text={c().notes} size="phone" />
+          {/* The note's checklist, on the sheet and outside any scroll view: a
+              press rewrites one line of the note, so there is nothing to save. */}
+          <ChecklistRows
+            notes={c().notes}
+            size="phone"
+            onChange={(next) => patchCard(id, { notes: next })}
+          />
         </View>
       </View>
       <View style={{ paddingHorizontal: 20, paddingTop: 10, gap: 14 }}>
@@ -927,9 +945,12 @@ function DetailBody(props: { id: string }) {
         <TagPicker selected={c().tags} onChange={(ids) => patchCard(c().id, { tags: ids })} size="phone" />
         <DueEditor
           due={c().due}
+          repeat={c().repeat}
           size="phone"
           settled={settled()}
-          onChange={(iso) => patchCard(c().id, { due: iso })}
+          // A deadline cleared takes the cycle with it: nothing to repeat from.
+          onChange={(iso) => patchCard(c().id, iso ? { due: iso } : { due: undefined, repeat: undefined })}
+          onRepeatChange={(next) => patchCard(c().id, { repeat: next })}
         />
         <View style={{ flexDirection: "row", gap: 18, paddingTop: 6 }}>
           <View

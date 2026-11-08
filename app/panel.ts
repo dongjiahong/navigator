@@ -37,3 +37,20 @@ export function panelSize(window: { width: number; height: number }): { width: n
 export function noteShare(panelHeight: number): number {
   return Math.max(120, Math.round(panelHeight * 0.42));
 }
+
+/**
+ * The smallest the note is ever allowed to be, measured or not.
+ *
+ * The note area holds more than the field now: a checklist's rows sit under it,
+ * and the space they take is space the measured box loses. A box that collapsed
+ * to nothing would be a field nobody can type in, so the height has a floor even
+ * when the panel is full — the note is the body of the card, and the panel does
+ * not scroll to give it more.
+ */
+export const NOTE_MIN = 80;
+
+/** The note field's height: what the layout measured, or a share of the panel
+ *  before the first measurement, and never under `NOTE_MIN`. */
+export function noteHeight(measured: number, panelHeight: number): number {
+  return Math.max(NOTE_MIN, measured > 0 ? measured : noteShare(panelHeight));
+}
