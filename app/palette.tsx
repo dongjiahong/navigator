@@ -26,7 +26,11 @@ export type CommandKind =
   | "clear-archive"
   | "clear-samples"
   | "tags"
-  | "lead";
+  | "lead"
+  | "export-json"
+  | "export-markdown"
+  | "import"
+  | "restore";
 
 export type Command = {
   /** Stable within one open palette, and the row's test id. */
@@ -154,6 +158,29 @@ export function rankCommands(
       50,
     );
   }
+  // The board's own paperwork: out to a file, back from the clipboard, and back
+  // from a snapshot. They sit under the everyday verbs because they are what a
+  // user reaches for when something went wrong, not on the way to work.
+  offer(
+    { id: "export-json", kind: "export-json", label: "导出看板（JSON）", hint: "下载" },
+    "导出看板 json 备份 backup export",
+    50,
+  );
+  offer(
+    { id: "export-markdown", kind: "export-markdown", label: "导出看板（Markdown）", hint: "下载" },
+    "导出看板 markdown md 文本 export",
+    46,
+  );
+  offer(
+    { id: "import", kind: "import", label: "从剪贴板导入看板" },
+    "从剪贴板导入看板 导入 import 合并",
+    42,
+  );
+  offer(
+    { id: "restore", kind: "restore", label: "从备份恢复…" },
+    "从备份恢复 恢复 restore 备份 backup 找回",
+    38,
+  );
 
   if (q) {
     const matched = all
@@ -228,8 +255,18 @@ function step(by: number): void {
  * resizing either, and it is one raised object: panel fill, 16px radius, the
  * lifted shadow, no border. Its rows are text and — for a tag — that tag's dot,
  * which is the only colour the board allows a row.
+ *
+ * The four verbs about the board leaving and coming back are handed in rather
+ * than imported: they are the app's, because writing a file is a native module
+ * and this file is read by a test bundle that has no app to call into.
  */
-export function CommandPalette(props: { onNew: () => void; onOpen: (id: string) => void }) {
+export function CommandPalette(props: {
+  onNew: () => void;
+  onOpen: (id: string) => void;
+  onExport: (kind: "json" | "markdown") => void;
+  onImport: () => void;
+  onRestore: () => void;
+}) {
   /** Runs the row `id` names, and closes. */
   const run = (id: string) => {
     // One press runs one row: the return key arrives from more than one place
@@ -263,6 +300,18 @@ export function CommandPalette(props: { onNew: () => void; onOpen: (id: string) 
         break;
       case "lead":
         setLeadMinutes(chosen.lead ?? 0);
+        break;
+      case "export-json":
+        props.onExport("json");
+        break;
+      case "export-markdown":
+        props.onExport("markdown");
+        break;
+      case "import":
+        props.onImport();
+        break;
+      case "restore":
+        props.onRestore();
         break;
     }
   };
@@ -453,12 +502,14 @@ function commandGlyph(kind: CommandKind): "plus" | "archive" | "tag" | "inbox" |
     case "new":
       return "plus";
     case "clear-archive":
+    case "restore":
       return "archive";
     case "clear-samples":
       return "close";
     case "tags":
     case "tag":
       return "tag";
+    case "import":
     case "unfilter":
       return "inbox";
     case "lead":

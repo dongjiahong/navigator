@@ -52,6 +52,16 @@ export function rememberBoard(): void {
 }
 
 /**
+ * Whether this launch has a file behind the board.
+ *
+ * The backups read it: a board that lives in memory has nowhere to be backed up
+ * to, and a test must not write into the folder the real app reads.
+ */
+export function boardOnDisk(): boolean {
+  return onDisk;
+}
+
+/**
  * Rows that came out of the file, so they are already written there.
  *
  * Only the stamps are recorded, never the column orders: a card the phone moved

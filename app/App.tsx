@@ -4,6 +4,8 @@ import { MacBoard } from "./MacBoard";
 import { Inspector } from "./Inspector";
 import { PhoneHome } from "./PhoneHome";
 import { CommandPalette, closePalette, openPalette, paletteOpen } from "./palette";
+import { BackupTool, exportBoard, importFromClipboard, openRestore } from "./BackupTool";
+import { startBackups } from "./backupStore";
 import { adoptWindowChrome, headerHeight, titleSpacer } from "./chrome";
 import {
   addCard,
@@ -269,6 +271,10 @@ async function boot() {
     console.log(`[navigator] the board could not be read: ${error}`);
   }
   startPersist();
+  // The day's snapshot, now that the board on screen is the file's board: a
+  // backup of the samples would be a backup of nothing the user wrote, and one
+  // taken before the read would miss everything the phone sent last night.
+  await startBackups();
   start();
   // Finished work is filed before the reminders read the board, so a card that
   // is about to leave 已完成 never gets a notification on its way out.
@@ -430,6 +436,9 @@ export function App() {
           adopt(id);
           selectedId.set(id);
         }}
+        onExport={(kind) => void exportBoard(kind)}
+        onImport={() => void importFromClipboard()}
+        onRestore={openRestore}
       />
 
       {/* One month for both layouts, for the same reason: the deadline editor on
@@ -439,6 +448,9 @@ export function App() {
           completion and an archive are all one press from being taken back, and
           the app says so in the same place whichever device did it. */}
       <UndoToast phone={windowSize().width < WIDE} />
+      {/* Export, import and restore: the line that reports them, and the sheet
+          that lists a week of snapshots. One mount, both layouts. */}
+      <BackupTool />
     </View>
   );
 }
