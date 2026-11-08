@@ -221,6 +221,17 @@ function swipeReach(): number {
  * two edges are where the drags are offered, and they are deliberately narrow —
  * if a sparser scroll view were ever to give this app the drags, the middle of
  * the row is still the pager's.
+ *
+ * **A handle under 44 points is a handle a thumb has to hunt for.** The leading
+ * strip holds the check circle and is 46; the trailing one is 56 rather than the
+ * 34 its grip mark alone needs, so that a left swipe starts on a target the
+ * platform would call one. The row is 358 points wide at 390, so the pager still
+ * owns 256 of them — the strips grew, the body did not shrink into a handle.
+ * `app.drag` is why the number matters to a test as well: it brings the named
+ * view "well inside" every scroll view around it first, and a point within a
+ * tenth of the pager's edge (39 of a 390-point page) sends it paging, which never
+ * converges on a paged scroll — a 34-point trailing strip sat 33 points from the
+ * edge and could not be dragged by a test at all.
  */
 const rowDrags = new Map<string, AnimatedValue>();
 const rowPans = new Map<string, ReturnType<typeof PanResponder.create>>();
@@ -585,13 +596,25 @@ function PhoneRow(props: { card: () => Card }) {
         </View>
         {/* The trailing edge, which held only padding before: a grip is drawn
             there — the same mark the Mac's cards carry — because a gesture with
-            no mark is a gesture nobody finds. Left swipe, and the room for it. */}
+            no mark is a gesture nobody finds. Left swipe, and the room for it.
+
+            The zone is 56 points and the mark keeps the 34 it always had, at the
+            row's edge: a handle under the 44 points a thumb needs is one a thumb
+            hunts for, and the reach it grew is quiet — the mark has not moved,
+            and the pager keeps the rest of the row (see `swipeFor`). The padding
+            is that quiet reach: 22 points at the inside of the handle. */}
         <View
           {...swipeFor(c().id, "trail").panHandlers}
           panActivation={{ activeOffsetX: 8, failOffsetY: 20 }}
           testID={`swipe-trail-${c().id}`}
           accessibilityLabel="左滑归档，或在归档里删除"
-          style={{ width: 34, alignSelf: "stretch", alignItems: "center", justifyContent: "center" }}
+          style={{
+            width: 56,
+            paddingLeft: 22,
+            alignSelf: "stretch",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
         >
           <Icon name="grip" size={15} tint={alpha(theme().textTertiary, 0.75)} width={2} dot={1.2} />
         </View>

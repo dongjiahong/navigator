@@ -18,6 +18,17 @@ import { openPhone } from "./testkit";
  * are the fast path where the board has nowhere to page to — measured on a real
  * macOS host, a left swipe on 待办 was the pager's while the same swipe on 归档
  * reached the row.
+ *
+ * **A drag cannot start within a tenth of the pager's edge.** `app.drag` brings
+ * the view it names "well inside" every scroll view around it before the finger
+ * lands, and a point inside `min(10% of the scroll view, 48)` of that view's edge
+ * sends it paging towards the middle. On a paged scroll that never converges: the
+ * page snaps back, the strip is measured at the same edge again, and the step
+ * fails as "did not come into view" after twenty tries — which is what these two
+ * tests did for a 34-point trailing strip, 33 points from the edge of a 390-point
+ * page. The trailing handle is 56 points for that reason (a thumb needs 44
+ * anyway), and these are the numbers that keep the fast path reachable by a
+ * finger and by a test alike.
  */
 
 test("a held row offers 完成", async () => {
