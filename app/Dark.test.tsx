@@ -54,3 +54,17 @@ test("mac deadline calendar dark", async () => {
   await app.wait(400);
   await app.screenshot("mac-calendar-dark.png");
 });
+
+/**
+ * The keyboard's cursor in the dark scheme, where its fill is a step off the
+ * card and the contrast question is a real one: the open card's fill is the
+ * same token in dark, so if the two won't separate here they won't separate at
+ * all.
+ */
+test("mac keyboard focus dark", async () => {
+  const app = await openSized(1280, 820, DARK);
+  if (!app || !(await canDraw(app))) return;
+  await app.keyboard.press("down");
+  await app.keyboard.press("down");
+  await app.screenshot("mac-focus-dark.png");
+});

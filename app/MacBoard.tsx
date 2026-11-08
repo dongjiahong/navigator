@@ -1,10 +1,10 @@
 import { LayoutAnimation, List, Overlay, PanResponder, Text, View, signal } from "nsh";
-import { COLUMNS, moveCard, setStatus, type Card, type Status } from "./data";
+import { cards, COLUMNS, moveCard, setStatus, type Card, type Status } from "./data";
 import { filteredBoard, isFiltering } from "./filters";
-import { lists, noteViewable } from "./focus";
-import { DueBadge, Icon, IconButton, TagRow, alpha } from "./ui";
+import { lists } from "./focus";
+import { DueBadge, Icon, IconButton, TagRow } from "./ui";
 import { theme, TYPE } from "./theme";
-import { COL_GAP, COL_MAX, HDR_H, PAD_X, PAD_Y, boardGeom, measureBoard } from "./geom";
+import { COL_GAP, COL_MAX, HDR_H, PAD_X, PAD_Y, ROW_GAP, ROW_TOP, boardGeom } from "./geom";
 
 /**
  * The drag, in one signal read only by the drag layer. Keeping it out of the
@@ -23,15 +23,23 @@ const dragging = signal<{
   lineY: number;
 } | null>(null);
 
-/** Responders are made once per card: one rebuilt on each render drops the gesture. */
+/** Responders are made once per card and per grip: one rebuilt on each render drops the gesture. */
 const pans = new Map<string, ReturnType<typeof PanResponder.create>>();
 
+/**
+ * Where each column's list sits in the window comes from `onLayout` on the
+ * board, the column and the list (see `geom.ts`), so the drop seam, the drop
+ * index and the edge band all work off the same numbers the layout engine
+ * produced — on every platform, refs or not.
+ */
 function computeDrop(pageX: number, pageY: number) {
   const local = pageX - boardGeom.left - PAD_X;
   const statusIdx = Math.max(0, Math.min(3, Math.floor(local / (boardGeom.colW + COL_GAP))));
   const status = COLUMNS[statusIdx].id;
   const rows = boardGeom.rows().filter((r) => r.status === status).sort((a, b) => a.y - b.y);
-  const localY = pageY - (boardGeom.top + HDR_H) + boardGeom.scrollY[statusIdx];
+  // The pointer against the column's content: what it is over, once the column's
+  // own scroll is added back.
+  const localY = pageY - boardGeom.bandTop(status) + boardGeom.scrollY[statusIdx];
   let index = 0;
   for (const r of rows) if (localY > r.y + r.h / 2) index++;
   const last = rows.length ? rows[rows.length - 1] : undefined;
@@ -40,48 +48,150 @@ function computeDrop(pageX: number, pageY: number) {
     status,
     index,
     lineX: boardGeom.left + PAD_X + statusIdx * (boardGeom.colW + COL_GAP) + 2,
-    lineY: boardGeom.top + HDR_H + anchor - boardGeom.scrollY[statusIdx],
+    lineY: boardGeom.bandTop(status) + anchor - boardGeom.scrollY[statusIdx],
   };
 }
 
-function panFor(cardId: string, every: () => Card) {
-  const cached = pans.get(cardId);
+/**
+ * Scrolling a column while a drag rests against its edge.
+ *
+ * A column is taller than the window once it holds a dozen cards, and a drop
+ * below the fold used to be unreachable: the card had to be dropped, the column
+ * scrolled, and the card picked up again. The band is 48 points and the speed
+ * grows with how far into it the pointer is, so a drop just past the edge creeps
+ * and one against the edge runs.
+ */
+const EDGE = 48;
+const TICK = 16;
+
+let auto: { status: Status; dir: 1 | -1; speed: number } | null = null;
+/** The timer, the offset it is moving to, and what the column last reported:
+ *  a list clamps at its ends, and the drift past the clamp has to be given back
+ *  rather than unwound when the pointer turns round. */
+let autoTimer: ReturnType<typeof setInterval> | null = null;
+let autoOffset = 0;
+let autoReported = 0;
+let autoStill = 0;
+
+function stopAutoScroll(): void {
+  if (autoTimer) clearInterval(autoTimer);
+  autoTimer = null;
+  auto = null;
+  autoStill = 0;
+}
+
+function tickAutoScroll(): void {
+  const a = auto;
+  if (!a) return;
+  const idx = COLUMNS.findIndex((c) => c.id === a.status);
+  const list = lists.get(a.status);
+  if (!list) return stopAutoScroll();
+  const reported = boardGeom.scrollY[idx];
+  if (reported !== autoReported) {
+    // The column moved to where it says it is (it clamps at its ends, and the
+    // user may scroll it under the drag): its own number is the true one.
+    autoReported = reported;
+    autoOffset = reported;
+    autoStill = 0;
+  } else if (autoStill++ > 4) {
+    // Asked to move five times and the column has not: it is at its end.
+    return stopAutoScroll();
+  }
+  autoOffset = Math.max(0, autoOffset + a.dir * a.speed);
+  list.scrollToOffset({ offset: autoOffset });
+  const d = dragging();
+  if (!d) return stopAutoScroll();
+  // The seam follows the content: the pointer has not moved, the cards under it
+  // have, and a drop has to land where the seam says it will.
+  const at = computeDrop(d.x, d.y);
+  dragging.set({ ...d, to: at.status, lineX: at.lineX, lineY: at.lineY });
+}
+
+/** Starts, retunes or stops the auto-scroll for a pointer at `y`. */
+function steerAutoScroll(status: Status, y: number): void {
+  const top = boardGeom.bandTop(status);
+  const height = boardGeom.bandHeight(status);
+  if (height <= 0) return stopAutoScroll();
+  const fromTop = y - top;
+  const fromBottom = top + height - y;
+  const dir = fromTop < EDGE ? -1 : fromBottom < EDGE ? 1 : 0;
+  if (dir === 0) return stopAutoScroll();
+  const depth = dir === -1 ? fromTop : fromBottom;
+  const speed = 2 + 10 * (1 - Math.max(0, Math.min(1, depth / EDGE)));
+  if (auto && auto.status === status && auto.dir === dir) {
+    auto.speed = speed;
+    return;
+  }
+  stopAutoScroll();
+  auto = { status, dir, speed };
+  const idx = COLUMNS.findIndex((c) => c.id === status);
+  autoReported = boardGeom.scrollY[idx];
+  autoOffset = autoReported;
+  autoTimer = setInterval(tickAutoScroll, TICK);
+}
+
+function beginDrag(id: string, pageX: number, pageY: number): void {
+  const card = cards().find((c) => c.id === id);
+  if (!card || card.deleted) return;
+  const at = computeDrop(pageX, pageY);
+  dragging.set({
+    id: card.id,
+    title: card.title,
+    tagIds: card.tags,
+    due: card.due,
+    to: at.status,
+    x: pageX,
+    y: pageY,
+    lineX: at.lineX,
+    lineY: at.lineY,
+  });
+  steerAutoScroll(at.status, pageY);
+}
+
+function moveDrag(pageX: number, pageY: number): void {
+  const d = dragging();
+  if (!d) return;
+  const at = computeDrop(pageX, pageY);
+  dragging.set({ ...d, x: pageX, y: pageY, to: at.status, lineX: at.lineX, lineY: at.lineY });
+  steerAutoScroll(at.status, pageY);
+}
+
+function endDrag(): void {
+  stopAutoScroll();
+  const d = dragging();
+  dragging.set(null);
+  if (!d) return;
+  const at = computeDrop(d.x, d.y);
+  LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+  moveCard(d.id, at.status, at.index);
+}
+
+function cancelDrag(): void {
+  stopAutoScroll();
+  dragging.set(null);
+}
+
+/**
+ * A pan on the whole card, and one on the grip.
+ *
+ * The grip is the visible affordance and always was; it claims the touch at
+ * once, because a press on a handle means nothing else. The card claims it only
+ * once the pointer has moved: a click that does not move has to stay a click
+ * that opens the card, which is what the board is for.
+ */
+function panFor(fromCard: boolean, cardId: string) {
+  const key = `${fromCard ? "card" : "grip"}:${cardId}`;
+  const cached = pans.get(key);
   if (cached) return cached;
   const pan = PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onPanResponderGrant: (e) => {
-      const c = every();
-      measureBoard();
-      const at = computeDrop(e.pageX, e.pageY);
-      dragging.set({
-        id: c.id,
-        title: c.title,
-        tagIds: c.tags,
-        due: c.due,
-        to: at.status,
-        x: e.pageX,
-        y: e.pageY,
-        lineX: at.lineX,
-        lineY: at.lineY,
-      });
-    },
-    onPanResponderMove: (_e, g) => {
-      const d = dragging();
-      if (!d) return;
-      const at = computeDrop(g.moveX, g.moveY);
-      dragging.set({ ...d, x: g.moveX, y: g.moveY, to: at.status, lineX: at.lineX, lineY: at.lineY });
-    },
-    onPanResponderRelease: () => {
-      const d = dragging();
-      dragging.set(null);
-      if (!d) return;
-      const at = computeDrop(d.x, d.y);
-      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-      moveCard(d.id, at.status, at.index);
-    },
-    onPanResponderTerminate: () => dragging.set(null),
+    onStartShouldSetPanResponder: () => !fromCard,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderGrant: (e) => beginDrag(cardId, e.pageX, e.pageY),
+    onPanResponderMove: (_e, g) => moveDrag(g.moveX, g.moveY),
+    onPanResponderRelease: endDrag,
+    onPanResponderTerminate: cancelDrag,
   });
-  pans.set(cardId, pan);
+  pans.set(key, pan);
   return pan;
 }
 
@@ -148,10 +258,13 @@ function CardView(props: {
   return (
     <View
       testID={`card-${card().id}`}
+      {...panFor(true, card().id).panHandlers}
+      // The card is a handle as well as a button: a press that does not move is
+      // a press that opens it, and the same press that moves 5 points lifts it.
+      // The grip keeps its own pan and activates at 4, because it has nothing
+      // else to do and a handle should answer the smallest movement.
+      panActivation={{ activeOffsetX: 5, activeOffsetY: 5 }}
       onPress={props.onSelect}
-      onLayout={(e) => {
-        boardGeom.setRow(card().id, { status: card().status, y: e.bounds.origin.y, h: e.bounds.size.height });
-      }}
       // A hover fill would repaint the card white and erase the selection, so
       // the open card keeps its own fill on hover — and its own hairline: the
       // pointer rests over the card that was just clicked, so an accent ring
@@ -218,7 +331,11 @@ function CardView(props: {
                 height: 13,
                 borderRadius: 6.5,
                 borderWidth: 1.4,
-                borderColor: alpha(theme().textTertiary, 0.85),
+                // Tertiary ink at full strength: a 1.4-pixel stroke over a
+                // translucent colour blends back toward the paper and lands
+                // near 3:1, under what a control's own edge is allowed. Solid
+                // tertiary is 5.9:1 on the light card and 5.7:1 on the dark one.
+                borderColor: theme().textTertiary,
               }}
             />
           )}
@@ -234,7 +351,7 @@ function CardView(props: {
           {card().title || "未命名卡片"}
         </Text>
         <View
-          {...panFor(card().id, card).panHandlers}
+          {...panFor(false, card().id).panHandlers}
           testID={`grip-${card().id}`}
           accessibilityLabel="拖动卡片"
           panActivation={{ activeOffsetX: 4, activeOffsetY: 4 }}
@@ -286,7 +403,10 @@ function Column(props: {
   const items = () => filteredBoard().filter((x) => x.status === props.status);
   const col = COLUMNS.find((c) => c.id === props.status)!;
   return (
-    <View style={{ width: props.width }}>
+    <View
+      style={{ width: props.width }}
+      onLayout={(e) => boardGeom.setColumn(props.status, e.bounds.origin.y)}
+    >
       <View
         testID={`head-${props.status}`}
         style={{
@@ -321,16 +441,18 @@ function Column(props: {
         testID={`col-${props.status}`}
         each={items()}
         estimatedItemSize={92}
-        contentStyle={{ paddingBottom: 40, rowGap: 7, paddingTop: 2 }}
+        onLayout={(e) =>
+          boardGeom.setBand(props.status, { top: e.bounds.origin.y, height: e.bounds.size.height })
+        }
+        contentStyle={{ paddingBottom: 40, rowGap: ROW_GAP, paddingTop: ROW_TOP }}
         style={{ flex: 1 }}
         scrollbar={false}
-        // The list is the only thing that knows what it is showing: the keys
-        // bring a card in only when it is not already there, and a drag near an
-        // edge moves it. Both go through this ref.
+        // A native scroll command needs the list's own view. Only a real window
+        // hands one over; the keys and the drag's edge band fall back to the
+        // layout numbers when it is missing, so neither depends on this.
         ref={(r) => {
           lists.set(props.status, r);
         }}
-        onViewableItemsChange={({ changed }) => noteViewable(props.status, changed)}
         onScroll={({ offset }) => {
           boardGeom.scrollY[props.index] = offset.y;
         }}
@@ -347,7 +469,19 @@ function Column(props: {
         }
       >
         {(item) => (
-          <View>
+          // The row's own frame, not the card's: a card's frame is inside this
+          // wrapper and its origin is always 0, while this one's is where the
+          // row sits in the column's content — the number a drop and a scroll
+          // need.
+          <View
+            onLayout={(e) =>
+              boardGeom.setRow(item().id, {
+                status: item().status,
+                y: e.bounds.origin.y,
+                h: e.bounds.size.height,
+              })
+            }
+          >
             <CardView
               card={item}
               selected={props.selectedId === item().id}
@@ -388,12 +522,15 @@ export function MacBoard(props: {
 }) {
   return (
     <>
-      <View testID="board" style={{ flex: 1, alignItems: "center" }}>
+      <View
+        testID="board"
+        style={{ flex: 1, alignItems: "center" }}
+        // The board's own place in the window, which every column's and list's
+        // frame is summed onto. `ref` never arrives on this engine, so this is
+        // where the drag's page coordinates come from.
+        onLayout={(e) => boardGeom.setOrigin(e.bounds.origin.x, e.bounds.origin.y)}
+      >
         <View
-          ref={(r) => {
-            boardGeom.ref = r;
-            measureBoard();
-          }}
           style={{
             width: boardWidth(props.width),
             flex: 1,

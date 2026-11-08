@@ -66,3 +66,20 @@ test("mac deadline calendar", async () => {
   await app.wait(1600);
   await app.screenshot("mac-calendar.png");
 });
+
+/**
+ * The keyboard's cursor, between two cards that do not have it.
+ *
+ * It is a fill and a shadow the open card does not have, and whether that reads
+ * as "the keys are here" without becoming the loudest card on the board is a
+ * question only a picture answers — the headless engine paints nothing.
+ */
+test("mac keyboard focus", async () => {
+  const app = await openSized(1280, 820, LIGHT);
+  if (!app || !(await canDraw(app))) return;
+  // 待办's first two cards are c2 and c3, so the shot holds one focused card and
+  // several unfocused ones in the same column.
+  await app.keyboard.press("down");
+  await app.keyboard.press("down");
+  await app.screenshot("mac-focus.png");
+});

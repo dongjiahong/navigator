@@ -1,4 +1,5 @@
-import { cards, type Status } from "./data";
+import { cards, COLUMNS, type Status } from "./data";
+import { filteredBoard } from "./filters";
 
 export const PAD_X = 16;
 export const PAD_Y = 12;
@@ -14,38 +15,80 @@ export const HDR_H = 38;
 /** The narrowest window that shows four columns at COL_MIN without scrolling. */
 export const MIN_WINDOW = COL_MIN * 4 + COL_GAP * 3 + PAD_X * 2;
 
-type Ref = { measure(): Promise<{ pagePosition: { x: number; y: number } } | null> } | undefined;
+/** A column's list: the air above its first row, the air between two rows, and
+ *  the height assumed for a row no cell has measured yet. */
+export const ROW_TOP = 2;
+export const ROW_GAP = 7;
+export const ROW_EST = 92;
+
+type Row = { id: string; status: Status; y: number; h: number };
+type Band = { top: number; height: number };
 
 /**
  * Board geometry, kept outside the components so a drag survives every render:
- * the board's page origin, each column's scroll offset, and where each card
- * sits. Handlers read these; never a style, so the drag never re-renders them.
+ * the board's page origin, each column's scroll offset, where each column's list
+ * sits, and where each card sits. Handlers read these; never a style, so the
+ * drag never re-renders them.
+ *
+ * Everything here comes from `onLayout`, which reports a view's frame inside its
+ * *parent*: the board's place in the window, a list's y under a column's label,
+ * a cell's height. Neither a `ref` nor a card's own frame helps — a ref is never
+ * delivered to a plain `View` on this engine, and inside a list cell a card's
+ * origin is always 0 — so a row's y is summed from the heights above it and the
+ * list's spacing.
  */
 export const boardGeom = {
   /** Column width for the current window, set by the board on each render. */
   colW: 288,
   /** Height of a column's label row, above its first card. */
   headerH: HDR_H,
+  /** The board's place in the window. `pageX` / `pageY` are measured from it. */
   left: 0,
   top: 0,
   scrollY: [0, 0, 0, 0],
-  ref: undefined as Ref,
-  rows_: new Map<string, { status: Status; y: number; h: number }>(),
-  setRow(id: string, row: { status: Status; y: number; h: number }) {
-    this.rows_.set(id, row);
+  bands: new Map<Status, Band>(),
+  heights: new Map<string, number>(),
+  /** Each column's y inside the board's row, from the column's `onLayout`. */
+  columnY: new Map<Status, number>(),
+  setOrigin(x: number, y: number) {
+    this.left = x;
+    this.top = y;
   },
-  /** Rows still on the board, in the columns that hold them now. */
-  rows(): { id: string; status: Status; y: number; h: number }[] {
-    const live = new Set(cards().map((c) => c.id));
-    for (const id of [...this.rows_.keys()]) if (!live.has(id)) this.rows_.delete(id);
-    return [...this.rows_.entries()].map(([id, r]) => ({ id, ...r }));
+  setBand(status: Status, band: Band) {
+    this.bands.set(status, band);
+  },
+  setColumn(status: Status, y: number) {
+    this.columnY.set(status, y);
+  },
+  setRow(id: string, row: { status: Status; y: number; h: number }) {
+    if (row.h > 0) this.heights.set(id, row.h);
+  },
+  /** Where a column's list viewport starts, in the window's coordinates. */
+  bandTop(status: Status): number {
+    return this.top + (this.columnY.get(status) ?? 0) + (this.bands.get(status)?.top ?? HDR_H);
+  },
+  /** The height a column's list shows, once it has been laid out. */
+  bandHeight(status: Status): number {
+    return this.bands.get(status)?.height ?? 0;
+  },
+  /** Rows still on the board, each with its place in its column's content. */
+  rows(): Row[] {
+    const gone = new Set(cards().filter((c) => c.deleted).map((c) => c.id));
+    for (const id of [...this.heights.keys()]) if (gone.has(id)) this.heights.delete(id);
+    // The list draws the filtered board in its order, so the rows are summed in
+    // that order: a column's y values are only right while they follow what is
+    // actually stacked there.
+    const shown = filteredBoard();
+    const out: Row[] = [];
+    for (const col of COLUMNS) {
+      let y = ROW_TOP;
+      for (const card of shown) {
+        if (card.status !== col.id) continue;
+        const h = this.heights.get(card.id) ?? ROW_EST;
+        out.push({ id: card.id, status: col.id, y, h });
+        y += h + ROW_GAP;
+      }
+    }
+    return out;
   },
 };
-
-export function measureBoard() {
-  boardGeom.ref?.measure().then((m) => {
-    if (!m) return;
-    boardGeom.left = m.pagePosition.x;
-    boardGeom.top = m.pagePosition.y;
-  });
-}

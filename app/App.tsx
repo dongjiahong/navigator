@@ -86,11 +86,13 @@ const WIDE = 900;
  * While a dialog owns the screen — the open card, the calendar, the tag manager
  * — the board under it is not what the keys would act on, and moving a card the
  * user cannot see is the kind of thing an app does once before it is trusted
- * with nothing. The phone has no cursor to move, so there the keys find no card
- * and do nothing.
+ * with nothing. The phone shows one column and no cursor, so the keys are not
+ * its own either.
  */
 function boardKeys(): boolean {
-  return selectedId() === null && pickingDue() === null && !managingTags();
+  return (
+    windowSize().width >= WIDE && selectedId() === null && pickingDue() === null && !managingTags()
+  );
 }
 
 /** Space, and 空格 on the circle: open work is finished, finished work reopens. */
@@ -244,22 +246,20 @@ async function boot() {
 
 export function App() {
   keymap.bind("mod+n", () => createIn("todo"));
-  // Escape empties the search field while it has the keyboard, and closes the
-  // open card otherwise: in a field, Escape means "never mind this search". It
-  // is bound `always` because a text field otherwise swallows the key first —
-  // the one shortcut an input may not take for itself.
+  // Escape empties the search field while it has the keyboard, which a field
+  // otherwise swallows. Bound first, so the closing binding below is the newer
+  // one and wins wherever both may fire — one keypress never does both, and
+  // Escape inside a title field still belongs to the field.
   keymap.bind(
     "escape",
     () => {
-      if (searchFocused()) {
-        searchQuery.set("");
-        blurSearch();
-        return;
-      }
-      closeCard();
+      if (!searchFocused()) return;
+      searchQuery.set("");
+      blurSearch();
     },
     { when: "always" },
   );
+  keymap.bind("escape", closeCard);
   // Search is a field on the board, so it is one key from the board: a Mac user
   // typing a title to find it should not have to find the field with the mouse.
   keymap.bind("mod+f", () => {
