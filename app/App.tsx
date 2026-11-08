@@ -22,7 +22,7 @@ import { adopt, focusId, focusedCard, keepFocus, moveFocus, shiftFocus } from ".
 import { MIN_WINDOW } from "./geom";
 import { hydrate, startPersist } from "./persist";
 import { nudgeSync, phase, start, statusLine } from "./sync";
-import { startReminders } from "./reminders";
+import { installReminders, openRequested, startReminders } from "./reminders";
 import { theme, onAccentWash } from "./theme";
 import {
   ClearFilterButton,
@@ -250,6 +250,11 @@ function MacShell() {
  * samples at all.
  */
 async function boot() {
+  // Before the board is even read: a click on a notification can be what
+  // launched this process, and the system only hands that answer to a delegate
+  // that is already set. Nothing here touches the board, so it costs the read
+  // nothing.
+  installReminders();
   try {
     await hydrate();
   } catch (error) {
@@ -357,6 +362,19 @@ export function App() {
     const id = selectedId();
     if (!id) return;
     if (!cards().some((c) => c.id === id && !c.deleted)) selectedId.set(null);
+  });
+
+  // A notification's own click asks for its card to be read. Which card is open
+  // is this shell's state, so the reminder module leaves the request in a
+  // signal and it is taken here — cleared first, so the same card can be asked
+  // for twice.
+  effect(() => {
+    const id = openRequested();
+    if (!id) return;
+    openRequested.set(null);
+    if (!cards().some((c) => c.id === id && !c.deleted)) return;
+    adopt(id);
+    selectedId.set(id);
   });
 
   // The keyboard's cursor follows the board: a card completed into another

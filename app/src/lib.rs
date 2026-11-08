@@ -714,8 +714,98 @@ pub struct Reminder;
 /// host, whose process has no bundle to be identified by.
 static AUTH: AtomicU64 = AtomicU64::new(0);
 
+/// What every reminder's identifier starts with, so the system's own list can
+/// be read back as card ids.
+const ID_PREFIX: &str = "navigator.card.";
+/// The category every reminder belongs to. A category is what gives a
+/// notification its buttons, so the content names it and `install` declares it.
+const CATEGORY: &str = "navigator.reminder";
+/// The suffix of the early reminder, the one that fires ahead of a deadline.
+const EARLY: &str = ".pre";
+
+/// The identifier the system knows one reminder by: the deadline's own
+/// notification is the bare card id, and the early one adds `.pre`, so the two
+/// are separate requests that never replace each other.
+fn identifier_text(id: &str) -> String {
+    format!("{ID_PREFIX}{id}")
+}
+
+/// The card an identifier names, and whether it was the early reminder.
+fn card_of(identifier: &str) -> Option<(String, bool)> {
+    let rest = identifier.strip_prefix(ID_PREFIX)?;
+    match rest.strip_suffix(EARLY) {
+        Some(id) => Some((id.to_owned(), true)),
+        None => Some((rest.to_owned(), false)),
+    }
+}
+
+/// What an action identifier asks for. `open` is a plain click on the
+/// notification, which the framework reports as an action of its own; the two
+/// buttons carry their own identifiers.
+fn action_of(action: &str) -> Option<&'static str> {
+    match action {
+        "done" => Some("done"),
+        "snooze" => Some("snooze"),
+        "open" => Some("open"),
+        _ => None,
+    }
+}
+
+/// What the user answered, waiting for the interface to collect it.
+///
+/// The notification centre calls its delegate on the main thread and the
+/// interface runs on a thread of its own, so this queue is the only thing the
+/// two share. It is also what keeps an answer that arrived before the interface
+/// was ready — the click that launched the app — instead of dropping it.
+static ANSWERS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+fn enqueue_answer(id: String, action: &str) {
+    if let Ok(mut queue) = ANSWERS.lock() {
+        queue.push((id, action.to_owned()));
+    }
+}
+
+/// Everything answered since the last call, as `[{ id, action }]`.
+fn take_answers() -> String {
+    let taken = match ANSWERS.lock() {
+        Ok(mut queue) => std::mem::take(&mut *queue),
+        Err(_) => Vec::new(),
+    };
+    let answers: Vec<Value> = taken
+        .iter()
+        .map(|(id, action)| json!({ "id": id, "action": action }))
+        .collect();
+    serde_json::to_string(&answers).unwrap_or_else(|_| "[]".to_owned())
+}
+
 #[module]
 impl Reminder {
+    /// Registers the reminder's category and takes the notification centre's
+    /// delegate: `ok`, or `unsupported` where the process has no notification
+    /// centre at all.
+    ///
+    /// This has to be the first thing the app does with reminders. A click on a
+    /// notification can be what launches the app, and the system only hands
+    /// that answer to a delegate that is already set; the category is what the
+    /// 完成 and 推迟 1 小时 buttons come from, and a notification naming a
+    /// category nobody registered arrives with no buttons.
+    pub fn install() -> String {
+        #[cfg(target_os = "macos")]
+        {
+            return macos::install();
+        }
+        #[allow(unreachable_code)]
+        "unsupported".to_owned()
+    }
+
+    /// What the user answered, as `[{ id, action }]`, and forgets it: `[]` when
+    /// nothing happened since the last ask. `action` is `done`, `snooze` or
+    /// `open`, and `id` is the card's — the early reminder's suffix is dropped,
+    /// because both buttons act on the same card.
+    pub fn take_responses() -> String {
+        take_answers()
+    }
+
     /// Asks once for permission to show notifications, and reports what the
     /// user allowed. The answer arrives asynchronously; call `status` again
     /// after a moment to read it.
@@ -869,15 +959,21 @@ impl Dock {
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use super::{AUTH, Ordering};
+    use super::{AUTH, CATEGORY, Ordering, card_of, enqueue_answer, identifier_text};
+    use block2::DynBlock;
     use objc2::rc::Retained;
-    use objc2::runtime::Bool;
+    use objc2::runtime::{Bool, NSObject, NSObjectProtocol, ProtocolObject};
+    use objc2::{AnyThread, define_class, msg_send};
     use objc2_app_kit::{NSApplication, NSDockTile};
-    use objc2_foundation::{NSArray, NSBundle, NSError, NSString};
+    use objc2_foundation::{NSArray, NSBundle, NSError, NSSet, NSString};
     use objc2_user_notifications::{
         UNAuthorizationOptions, UNAuthorizationStatus, UNMutableNotificationContent,
-        UNNotificationRequest, UNNotificationSettings, UNNotificationSound,
-        UNTimeIntervalNotificationTrigger, UNUserNotificationCenter,
+        UNNotification, UNNotificationAction, UNNotificationActionOptions, UNNotificationCategory,
+        UNNotificationCategoryOptions, UNNotificationDefaultActionIdentifier,
+        UNNotificationDismissActionIdentifier, UNNotificationPresentationOptions,
+        UNNotificationRequest, UNNotificationResponse, UNNotificationSettings,
+        UNNotificationSound, UNTimeIntervalNotificationTrigger, UNUserNotificationCenter,
+        UNUserNotificationCenterDelegate,
     };
 
     /// The system's notification centre, or `None` when the process is not an
@@ -904,7 +1000,136 @@ mod macos {
     /// Notification identifiers are the card's id, so a rescheduled card
     /// replaces its own reminder instead of stacking a second one.
     fn identifier(id: &str) -> Retained<NSString> {
-        NSString::from_str(&format!("navigator.card.{id}"))
+        NSString::from_str(&identifier_text(id))
+    }
+
+    define_class!(
+        // SAFETY: NSObject has no subclassing requirements, and this class holds
+        // no instance variables — there is nothing to drop, lock or keep in
+        // step with Objective-C.
+        #[unsafe(super(NSObject))]
+        #[name = "NavigatorNotificationDelegate"]
+        #[ivars = ()]
+        struct Delegate;
+
+        unsafe impl NSObjectProtocol for Delegate {}
+
+        unsafe impl UNUserNotificationCenterDelegate for Delegate {
+            /// A deadline that comes due while the board is open is still a
+            /// deadline. The system asks the delegate what to do with a
+            /// notification arriving in front of the app, and without this
+            /// answer it shows nothing at all.
+            #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
+            fn will_present(
+                &self,
+                _center: &UNUserNotificationCenter,
+                _notification: &UNNotification,
+                completion: &DynBlock<dyn Fn(UNNotificationPresentationOptions)>,
+            ) {
+                completion.call((
+                    UNNotificationPresentationOptions::Banner
+                        | UNNotificationPresentationOptions::List
+                        | UNNotificationPresentationOptions::Sound,
+                ));
+            }
+
+            /// What the user did with a notification: a click on it, or one of
+            /// the two buttons. The answer is only queued here — the board lives
+            /// on the interface's own thread, and this callback runs on the
+            /// main one.
+            #[unsafe(method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:))]
+            fn did_receive(
+                &self,
+                _center: &UNUserNotificationCenter,
+                response: &UNNotificationResponse,
+                completion: &DynBlock<dyn Fn()>,
+            ) {
+                let action = answer_of(&response.actionIdentifier().to_string());
+                if let Some(action) = action {
+                    let identifier = response.notification().request().identifier().to_string();
+                    if let Some((id, _early)) = card_of(&identifier) {
+                        enqueue_answer(id, action);
+                    }
+                }
+                completion.call(());
+            }
+        }
+    );
+
+    impl Delegate {
+        fn new() -> Retained<Self> {
+            let this = Self::alloc().set_ivars(());
+            unsafe { msg_send![super(this), init] }
+        }
+    }
+
+    /// What an action identifier from the system means: a plain click on the
+    /// notification is `open`, a dismissal is nothing (closing a notification is
+    /// not an answer), and the two buttons name themselves.
+    fn answer_of(action: &str) -> Option<&'static str> {
+        // SAFETY: both are the framework's own constants, exported by
+        // UserNotifications and valid for the life of the process.
+        let (default, dismiss) = unsafe {
+            (
+                UNNotificationDefaultActionIdentifier.to_string(),
+                UNNotificationDismissActionIdentifier.to_string(),
+            )
+        };
+        if action == default {
+            Some("open")
+        } else if action == dismiss {
+            None
+        } else {
+            super::action_of(action)
+        }
+    }
+
+    /// The delegate the notification centre holds. Its `delegate` property is
+    /// weak, so this is what keeps the object alive: made once, kept for the
+    /// life of the process, so an answer arriving at any point finds it.
+    fn delegate() -> &'static Retained<Delegate> {
+        static DELEGATE: std::sync::OnceLock<Retained<Delegate>> = std::sync::OnceLock::new();
+        DELEGATE.get_or_init(Delegate::new)
+    }
+
+    /// Declares the category every reminder belongs to, with the two things a
+    /// reminder can be answered with.
+    ///
+    /// The buttons carry no options on purpose: neither needs the app brought
+    /// forward, and an action that pulls the window in front of what the user is
+    /// reading is a worse answer than the answer itself.
+    fn register_categories(center: &UNUserNotificationCenter) {
+        let done = UNNotificationAction::actionWithIdentifier_title_options(
+            &NSString::from_str("done"),
+            &NSString::from_str("完成"),
+            UNNotificationActionOptions::empty(),
+        );
+        let snooze = UNNotificationAction::actionWithIdentifier_title_options(
+            &NSString::from_str("snooze"),
+            &NSString::from_str("推迟 1 小时"),
+            UNNotificationActionOptions::empty(),
+        );
+        let category = UNNotificationCategory::categoryWithIdentifier_actions_intentIdentifiers_options(
+            &NSString::from_str(CATEGORY),
+            &NSArray::from_retained_slice(&[done, snooze]),
+            &NSArray::new(),
+            UNNotificationCategoryOptions::empty(),
+        );
+        center.setNotificationCategories(&NSSet::from_retained_slice(&[category]));
+    }
+
+    pub fn install() -> String {
+        let Some(center) = center() else {
+            return "unsupported".to_owned();
+        };
+        register_categories(&center);
+        let delegate = delegate();
+        center.setDelegate(Some(ProtocolObject::from_ref(&**delegate)));
+        // The center's registration with the notification daemon is
+        // asynchronous, so nothing here reads the delegate back: it answers
+        // `true` only a moment later, and a status that said `false` for a
+        // delegate that is set would be worse than no status at all.
+        "ok".to_owned()
     }
 
     fn remember(status: UNAuthorizationStatus) {
@@ -977,6 +1202,9 @@ mod macos {
             content.setBody(&NSString::from_str(body));
         }
         content.setSound(Some(&UNNotificationSound::defaultSound()));
+        // The category is what the 完成 and 推迟 1 小时 buttons hang off, so the
+        // early reminder names the same category as the deadline's.
+        content.setCategoryIdentifier(&NSString::from_str(CATEGORY));
 
         let trigger =
             UNTimeIntervalNotificationTrigger::triggerWithTimeInterval_repeats(seconds, false);
@@ -1230,6 +1458,47 @@ mod tests {
         let at = Instant::now();
         wait_for_nudge(Duration::from_millis(400), &mut seen);
         assert!(at.elapsed() >= Duration::from_millis(400));
+    }
+
+    #[test]
+    fn a_response_names_the_card_and_what_was_asked() {
+        // The early reminder carries its own identifier, and both come back as
+        // the card an answer acts on.
+        assert_eq!(identifier_text("c1"), "navigator.card.c1");
+        assert_eq!(identifier_text("c1.pre"), "navigator.card.c1.pre");
+        assert_eq!(card_of("navigator.card.c1"), Some(("c1".to_owned(), false)));
+        assert_eq!(card_of("navigator.card.c1.pre"), Some(("c1".to_owned(), true)));
+        // Anything that is not one of this app's reminders is not a card.
+        assert_eq!(card_of("someone.else.c1"), None);
+        assert_eq!(card_of(""), None);
+    }
+
+    #[test]
+    fn an_answer_is_one_of_the_three_verbs() {
+        assert_eq!(action_of("done"), Some("done"));
+        assert_eq!(action_of("snooze"), Some("snooze"));
+        assert_eq!(action_of("open"), Some("open"));
+        // The system's dismiss is reported as an action of its own and is not
+        // one of ours: closing a notification is not an answer.
+        assert_eq!(action_of("com.apple.UNNotificationDismissActionIdentifier"), None);
+    }
+
+    #[test]
+    fn an_answer_waits_in_the_queue_until_it_is_collected() {
+        // Nothing answered yet.
+        assert_eq!(take_answers(), "[]");
+        enqueue_answer("c1".to_owned(), "done");
+        enqueue_answer("c2".to_owned(), "snooze");
+        let taken: Value = serde_json::from_str(&take_answers()).unwrap();
+        assert_eq!(
+            taken,
+            json!([
+                { "id": "c1", "action": "done" },
+                { "id": "c2", "action": "snooze" }
+            ])
+        );
+        // Collecting empties it: the interface applies each answer once.
+        assert_eq!(take_answers(), "[]");
     }
 
     #[test]

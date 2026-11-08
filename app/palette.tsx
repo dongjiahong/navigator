@@ -2,6 +2,7 @@ import { Scroll, Text, View, effect, keymap, signal, windowSize } from "nsh";
 import { Dialog, Input } from "nsh/base";
 import { COLUMNS, boardTags, cards, sampleCardsLeft, type Card, type Status, type Tag } from "./data";
 import { clearFilters, tagFilter } from "./filters";
+import { LEAD_CHOICES, leadMinutes, setLeadMinutes } from "./deadline";
 import { Icon, IconButton, clearArchive, clearSamples, managingTags } from "./ui";
 import { hueColor, theme, type Hue } from "./theme";
 
@@ -24,7 +25,8 @@ export type CommandKind =
   | "unfilter"
   | "clear-archive"
   | "clear-samples"
-  | "tags";
+  | "tags"
+  | "lead";
 
 export type Command = {
   /** Stable within one open palette, and the row's test id. */
@@ -38,6 +40,8 @@ export type Command = {
   /** The tag a `tag` command narrows to, and the dot its row draws. */
   tagId?: string;
   hue?: Hue;
+  /** The lead time a `lead` command sets, in minutes; `0` is off. */
+  lead?: number;
 };
 
 /** How many cards the palette will offer: more is a list to read, not a choice. */
@@ -89,7 +93,12 @@ function cardScore(query: string, card: Card, tagName: (id: string) => string): 
  * stable list of verbs — opening a palette should not be a wall of every card on
  * the board — and any query puts the cards it matches above the verbs.
  */
-export function rankCommands(query: string, all: Card[], tags: Tag[]): Command[] {
+export function rankCommands(
+  query: string,
+  all: Card[],
+  tags: Tag[],
+  lead: number = leadMinutes(),
+): Command[] {
   const q = query.trim().toLowerCase();
   const tagName = (id: string) => tags.find((t) => t.id === id)?.label ?? id;
   const out: { command: Command; rank: number }[] = [];
@@ -133,6 +142,18 @@ export function rankCommands(query: string, all: Card[], tags: Tag[]): Command[]
   }
 
   offer({ id: "unfilter", kind: "unfilter", label: "清除筛选", hint: "全部" }, "清除筛选 全部 显示所有", 60);
+
+  // The Mac's only setting: there is no settings page, and a lead time is one
+  // number, so it is one row per value in the field that already reaches every
+  // verb. The lead in use says so on its own row rather than in a status line.
+  for (const minutes of LEAD_CHOICES) {
+    const label = minutes === 0 ? "提前提醒：关闭" : `提前提醒：${minutes} 分钟`;
+    offer(
+      { id: `lead-${minutes}`, kind: "lead", lead: minutes, label, hint: minutes === lead ? "当前" : undefined },
+      `提前提醒 提醒 提前 ${minutes === 0 ? "关闭 不提醒" : `${minutes} 分钟`}`,
+      50,
+    );
+  }
 
   if (q) {
     const matched = all
@@ -239,6 +260,9 @@ export function CommandPalette(props: { onNew: () => void; onOpen: (id: string) 
         break;
       case "tags":
         managingTags.set(true);
+        break;
+      case "lead":
+        setLeadMinutes(chosen.lead ?? 0);
         break;
     }
   };
@@ -424,7 +448,7 @@ function selectedId(): string | null {
 }
 
 /** The glyph a verb carries, from the board's own icon set. */
-function commandGlyph(kind: CommandKind): "plus" | "archive" | "tag" | "inbox" | "chevron" | "close" {
+function commandGlyph(kind: CommandKind): "plus" | "archive" | "tag" | "inbox" | "chevron" | "close" | "calendar" {
   switch (kind) {
     case "new":
       return "plus";
@@ -437,6 +461,8 @@ function commandGlyph(kind: CommandKind): "plus" | "archive" | "tag" | "inbox" |
       return "tag";
     case "unfilter":
       return "inbox";
+    case "lead":
+      return "calendar";
     default:
       return "chevron";
   }

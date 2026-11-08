@@ -1,6 +1,7 @@
 import { expect, test } from "nsh/test";
 import { openSized } from "./testkit";
 import { epochOf, remindsAt, type Card } from "./data";
+import { applyResponse, reminderPlan } from "./deadline";
 import { openApp } from "./testkit";
 
 /**
@@ -10,9 +11,10 @@ import { openApp } from "./testkit";
  * (`Reminder`); on the phone no system notification can be posted at all, so a
  * deadline that comes due while the app is open puts a banner on the list.
  *
- * `epochOf` and `remindsAt` are the whole scheduling decision, so they are
- * tested as pure functions: they say which cards are worth a reminder and when
- * it fires.
+ * `epochOf`, `remindsAt`, `reminderPlan` and `applyResponse` are the whole
+ * scheduling and answering decision, so they are tested as pure functions: they
+ * say which cards are worth a reminder, when each one fires, and what the two
+ * buttons on a notification do to the board.
  */
 
 function card(patch: Partial<Card> = {}): Card {
@@ -40,6 +42,53 @@ test("only open work with a deadline ahead gets a reminder", () => {
   expect(remindsAt(card({ due: "2026-11-12T14:30", deleted: true }), now)).toBe(false);
 });
 
+test("an early reminder is planned ahead of the deadline, and only when there is room", () => {
+  const now = new Date(2026, 10, 12, 12, 0).getTime();
+  const due = "2026-11-12T14:30";
+  const at = epochOf(due);
+
+  // Off by default: one notification, the deadline's own, at the deadline.
+  expect(reminderPlan(card({ due }), now, 0)).toEqual({ at });
+  // Fifteen minutes ahead is a second notification, at 14:15, beside the due
+  // one — the deadline's reminder is not replaced by the early one.
+  expect(reminderPlan(card({ due }), now, 15)).toEqual({ at, pre: at - 15 * 60_000 });
+
+  // A card twenty minutes out has room for a fifteen-minute lead and none for
+  // a thirty-minute one: a notification saying it is half an hour away when it
+  // is twenty minutes away would be wrong.
+  const soon = card({ due: "2026-11-12T12:20" });
+  expect(reminderPlan(soon, now, 15)).toEqual({ at: epochOf(soon.due!), pre: now + 5 * 60_000 });
+  expect(reminderPlan(soon, now, 30)).toEqual({ at: epochOf(soon.due!) });
+
+  // Nothing the system should hold a reminder for gets an early one either.
+  expect(reminderPlan(card({ due, status: "done" }), now, 15)).toEqual({});
+  expect(reminderPlan(card({ due, status: "archive" }), now, 15)).toEqual({});
+  expect(reminderPlan(card({ due: "2026-11-12T11:00" }), now, 15)).toEqual({});
+  expect(reminderPlan(card({ due, deleted: true }), now, 15)).toEqual({});
+  expect(reminderPlan(card(), now, 15)).toEqual({});
+});
+
+test("an answer does what it says, and nothing for a card that is gone", () => {
+  const now = new Date(2026, 10, 12, 12, 34, 30, 120).getTime();
+  const open = card({ id: "a" });
+
+  // 完成 finishes the card, through the same path the check circle uses.
+  expect(applyResponse(open, "done", now)).toEqual({ done: true });
+  // 推迟 1 小时 moves the deadline an hour out, to the minute: a due is written
+  // without seconds, so the card shows 13:34 rather than 13:34:30.
+  expect(applyResponse(open, "snooze", now)).toEqual({ due: "2026-11-12T13:34" });
+  // The notification's own click asks for the card, and the shell opens it.
+  expect(applyResponse(open, "open", now)).toEqual({ open: true });
+
+  // Closing a notification is not an answer, an unknown action is not one
+  // either, and a card removed on either device is a tombstone no button can
+  // undo.
+  expect(applyResponse(open, "dismiss", now)).toBeNull();
+  expect(applyResponse(open, "", now)).toBeNull();
+  expect(applyResponse(undefined, "done", now)).toBeNull();
+  expect(applyResponse(card({ deleted: true }), "snooze", now)).toBeNull();
+});
+
 test("the calendar sets a deadline on any day", async () => {
   const { app, desktop } = await openApp();
   if (!desktop) return;
@@ -63,6 +112,41 @@ test("the calendar sets a deadline on any day", async () => {
   // The card now carries that day, and the time it already had (20:00).
   const label = `${day.getMonth() + 1}月${day.getDate()}日`;
   expect(app.texts().some((t) => t.includes(label) && t.includes("20:00"))).toBe(true);
+});
+
+test("the command field is where the lead time is chosen", async () => {
+  const { app, desktop } = await openApp();
+  if (!desktop) return;
+
+  // There is no settings page: the field that reaches every verb is where the
+  // one number this app keeps is set. 提前 narrows the list to its five values.
+  await app.keyboard.press("mod+k");
+  await app.waitFor("id:palette-input");
+  await app.type("id:palette-input", "提前");
+  await app.wait(300);
+  expect(app.shows("id:cmd-lead-0")).toBe(true);
+  expect(app.shows("id:cmd-lead-15")).toBe(true);
+  // Off is the default, and the row in use says so on its right.
+  let texts = app.texts();
+  let current = texts.indexOf("当前");
+  expect(current).toBeGreaterThan(0);
+  expect(texts[current - 1]).toBe("提前提醒：关闭");
+
+  await app.press("id:cmd-lead-15");
+  await app.wait(300);
+  // The row does what every other row does: it runs and the field closes.
+  expect(app.shows("id:palette-input")).toBe(false);
+  // The choice is kept on this device's own storage, not on the board.
+  await app.waitUntil(() => app.storage()["navigator.leadMinutes"] === "15");
+
+  // Asked again, the value in use is the one now marked 当前.
+  await app.keyboard.press("mod+k");
+  await app.waitFor("id:palette-input");
+  await app.type("id:palette-input", "提前");
+  await app.wait(300);
+  texts = app.texts();
+  current = texts.indexOf("当前");
+  expect(texts[current - 1]).toBe("提前提醒：15 分钟");
 });
 
 test("the phone shows a banner when a deadline comes due while it is open", async () => {

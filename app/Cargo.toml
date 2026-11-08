@@ -22,13 +22,17 @@ rusqlite = { version = "0.41.1", features = ["bundled"] }
 # the app is closed, and plays the sound chosen in System Settings.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6.5", features = ["exception"] }
-objc2-foundation = { version = "0.3.2", features = ["std", "NSString", "NSArray", "NSError", "NSBundle"] }
+objc2-foundation = { version = "0.3.2", features = ["std", "NSString", "NSArray", "NSSet", "NSError", "NSBundle"] }
 objc2-user-notifications = { version = "0.3.2", features = [
     "std",
     "block2",
     "UNUserNotificationCenter",
+    "UNNotification",
+    "UNNotificationAction",
+    "UNNotificationCategory",
     "UNNotificationContent",
     "UNNotificationRequest",
+    "UNNotificationResponse",
     "UNNotificationSettings",
     "UNNotificationSound",
     "UNNotificationTrigger",
