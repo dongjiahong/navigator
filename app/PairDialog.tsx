@@ -101,8 +101,11 @@ export function PairDialog() {
 }
 
 /**
- * The title band's way in. Small and quiet: it sits beside the sync line, which
- * is where a user looks when a phone will not connect.
+ * The title band's way in. Small and quiet, a step to the right of the sync
+ * line it belongs beside: where a user looks when a phone will not connect.
+ *
+ * The press area is padded well past the words — the label is 11.5pt, so the
+ * words alone are a target a pointer misses.
  */
 export function PairCodeLink() {
   return (
@@ -113,7 +116,7 @@ export function PairCodeLink() {
       accessibilityLabel="配对码"
       hoverStyle={{ opacity: 0.7 }}
       activeStyle={{ opacity: 0.5 }}
-      style={{ paddingHorizontal: 5, paddingVertical: 3 }}
+      style={{ paddingLeft: 9, paddingRight: 6, paddingVertical: 5 }}
     >
       <Text style={{ fontSize: 11.5, fontWeight: "500", color: theme().textTertiary }}>
         配对码
