@@ -300,26 +300,6 @@ pub fn rows_since(conn: &Connection, since: i64) -> Result<String, String> {
     Ok(json!({ "cards": cards, "tags": tags, "at": at, "total": total }).to_string())
 }
 
-/// How many live cards the board holds, and the newest stamp in it.
-pub fn counts(conn: &Connection) -> Result<(i64, i64, i64), String> {
-    let cards: i64 = conn
-        .query_row("SELECT COUNT(*) FROM cards WHERE deleted = 0", [], |r| r.get(0))
-        .map_err(failed)?;
-    let tags: i64 = conn
-        .query_row("SELECT COUNT(*) FROM tags WHERE deleted = 0", [], |r| r.get(0))
-        .map_err(failed)?;
-    let at: i64 = conn
-        .query_row(
-            "SELECT MAX(m) FROM (SELECT MAX(updated_at) AS m FROM cards
-                                 UNION ALL SELECT MAX(updated_at) FROM tags)",
-            [],
-            |r| r.get::<_, Option<i64>>(0),
-        )
-        .map_err(failed)?
-        .unwrap_or(0);
-    Ok((cards, tags, at))
-}
-
 /// Empties the board, for a test that needs a first run.
 pub fn clear(conn: &Connection) -> Result<(), String> {
     conn.execute_batch("DELETE FROM cards; DELETE FROM tags; DELETE FROM meta;")

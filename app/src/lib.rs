@@ -48,7 +48,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use nsh_core::prelude::*;
 use serde_json::{Value, json};
 
+mod auth;
 mod board;
+/// The handshake over a real loopback socket, as the two devices do it.
+#[cfg(test)]
+mod pairing_test;
 
 const MAX_BODY: usize = 4 * 1024 * 1024;
 
@@ -77,6 +81,13 @@ static SYNCED_AT: AtomicU64 = AtomicU64::new(0);
 static UNREACHABLE: Mutex<bool> = Mutex::new(false);
 /// Bumped when the app wants the exchange thread to look for the Mac again now.
 static NUDGE: AtomicU64 = AtomicU64::new(0);
+/// When the Mac last refused this phone's pairing code, in millis; 0 for never.
+/// While it is set the phone stops asking: five refusals shut the Mac's door, so
+/// a phone that kept trying on its own would lock its owner out of their board.
+static REFUSED_AT: AtomicU64 = AtomicU64::new(0);
+/// The earliest moment this phone may ask again, in millis; 0 for now. Set when
+/// the Mac answers 429, and waited out in full.
+static RETRY_AT: AtomicU64 = AtomicU64::new(0);
 
 fn parse_cards(text: &str) -> Result<Vec<Value>, String> {
     let value: Value = serde_json::from_str(text).map_err(|e| format!("bad JSON: {e}"))?;
@@ -248,12 +259,16 @@ fn socket_address(base: &str) -> String {
     }
 }
 
-/// POSTs `body` to `/state` on `base` and returns the response body.
-///
-/// Our own HTTP over a raw socket: Android refuses cleartext to a LAN address
-/// through its HTTP client, and the request is four lines anyway.
-fn post_state(base: &str, body: &str) -> Result<String, String> {
-    let address = socket_address(base);
+/// One request to the Mac, over our own socket: Android refuses cleartext to a
+/// LAN address through its HTTP client, and a request is four lines anyway.
+/// Answers the status it came back with and the body under it.
+fn request(
+    address: &str,
+    method: &str,
+    path: &str,
+    body: &str,
+    headers: &[(&str, &str)],
+) -> Result<(u16, String), String> {
     let stream = TcpStream::connect_timeout(
         &address.parse::<SocketAddr>().map_err(|e| format!("{address}: {e}"))?,
         EXCHANGE_WAIT,
@@ -262,10 +277,14 @@ fn post_state(base: &str, body: &str) -> Result<String, String> {
     stream.set_read_timeout(Some(EXCHANGE_WAIT)).ok();
     stream.set_write_timeout(Some(EXCHANGE_WAIT)).ok();
     let mut stream = stream;
+    let mut extra = String::new();
+    for (name, value) in headers {
+        extra.push_str(&format!("{name}: {value}\r\n"));
+    }
     let head = format!(
-        "POST /state HTTP/1.1\r\nHost: {address}\r\n\
+        "{method} {path} HTTP/1.1\r\nHost: {address}\r\n\
          Content-Type: application/json\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n",
+         Content-Length: {}\r\n{extra}Connection: close\r\n\r\n",
         body.len()
     );
     stream.write_all(head.as_bytes()).map_err(|e| e.to_string())?;
@@ -278,10 +297,58 @@ fn post_state(base: &str, body: &str) -> Result<String, String> {
     let (head, body) = text
         .split_once("\r\n\r\n")
         .ok_or_else(|| "the Mac answered no body".to_owned())?;
-    if !head.starts_with("HTTP/1.1 200") {
-        return Err(head.lines().next().unwrap_or("bad answer").to_owned());
+    let status = head
+        .split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse::<u16>().ok())
+        .ok_or_else(|| head.lines().next().unwrap_or("bad answer").to_owned())?;
+    Ok((status, body.to_owned()))
+}
+
+/// What one exchange with the Mac came to.
+enum Exchange {
+    /// The Mac merged the board and answered with what this phone was missing.
+    Merged(String),
+    /// The Mac answered and would not let this phone in; `locked` when it is
+    /// rate-limited rather than merely unconvinced by the code.
+    Refused { locked: bool },
+    /// The Mac did not answer at all, or answered something that is not an
+    /// exchange. Nothing in the app can do anything about it but try again.
+    Missing,
+}
+
+/// Asks for a challenge, then POSTs `body` to `/state` signed with it.
+///
+/// One challenge per exchange: a challenge answers exactly one request, so it is
+/// asked for immediately before the request it signs rather than being kept.
+fn post_state(base: &str, body: &str) -> Exchange {
+    let address = socket_address(base);
+    let nonce = match request(&address, "GET", "/challenge", "", &[]) {
+        Ok((200, text)) => match serde_json::from_str::<Value>(&text)
+            .ok()
+            .and_then(|value| value.get("nonce").and_then(Value::as_str).map(str::to_owned))
+        {
+            Some(nonce) => nonce,
+            None => return Exchange::Missing,
+        },
+        Ok(_) => return Exchange::Missing,
+        Err(_) => return Exchange::Missing,
+    };
+    let Some(proof) = auth::signed(&nonce) else {
+        // No code on this phone: nothing to prove, so there is nothing to ask
+        // for. The Mac would answer 401, and five of those shut its door.
+        return Exchange::Refused { locked: false };
+    };
+    let signed = [
+        (auth::NONCE_HEADER, nonce.as_str()),
+        (auth::PROOF_HEADER, proof.as_str()),
+    ];
+    match request(&address, "POST", "/state", body, &signed) {
+        Ok((200, text)) => Exchange::Merged(text),
+        Ok((401, _)) => Exchange::Refused { locked: false },
+        Ok((429, _)) => Exchange::Refused { locked: true },
+        Ok(_) | Err(_) => Exchange::Missing,
     }
-    Ok(body.to_owned())
 }
 
 /// How long the phone waits before probing again, after `missed` probes in a row
@@ -308,6 +375,13 @@ fn exchange_loop() {
             seen_nudge = nudge;
             missed = 0;
         }
+        // An unpaired phone stays quiet: it has nothing to prove, and every
+        // attempt it made would count against the Mac's five. Waiting here is
+        // the app saying "pair me", and pairing nudges the thread awake.
+        if !auth::has_prover() {
+            wait_for_nudge(Duration::from_secs(2), &mut seen_nudge);
+            continue;
+        }
         let peer = {
             let known = PEER.lock().unwrap().clone();
             known.or_else(|| {
@@ -327,6 +401,22 @@ fn exchange_loop() {
         };
         // There is a Mac: the next probe is three seconds away again.
         missed = 0;
+        // A refusal is the user's to fix, not the loop's: the Mac would not take
+        // this phone's code, and asking again only spends the five attempts it
+        // allows before shutting the door on its owner. Nothing is sent until
+        // the code changes — and the changes waiting in the outbox stay there.
+        if REFUSED_AT.load(Ordering::Relaxed) != 0 {
+            wait_for_nudge(Duration::from_secs(2), &mut seen_nudge);
+            continue;
+        }
+        // A Mac that answered 429 named the wait, and the whole of it is kept:
+        // nudges do not shorten another app's lockout.
+        let retry = RETRY_AT.load(Ordering::Relaxed);
+        let now = now_millis();
+        if retry > now {
+            thread::sleep(Duration::from_millis((retry - now).min(1000)));
+            continue;
+        }
         // Taking the body, not copying it: a body the Mac answered is done with,
         // and re-sending it would re-send the same changes every 1.5 seconds for
         // as long as the app is open.
@@ -336,27 +426,45 @@ fn exchange_loop() {
             continue;
         };
         match post_state(&peer, &body) {
-            Ok(merged) => {
+            Exchange::Merged(merged) => {
                 *INBOX.lock().unwrap() = Some(merged);
                 *UNREACHABLE.lock().unwrap() = false;
+                REFUSED_AT.store(0, Ordering::Relaxed);
+                RETRY_AT.store(0, Ordering::Relaxed);
                 SYNCED_AT.store(now_millis(), Ordering::Relaxed);
             }
-            Err(_) => {
+            Exchange::Refused { locked } => {
+                // The Mac answered, so it is there: what failed is the code,
+                // and forgetting the address would only send the phone looking
+                // for a Mac it has already found. The body goes back — none of
+                // it was merged.
+                put_back(body);
+                if locked {
+                    RETRY_AT.store(now_millis() + auth::LOCK.as_millis() as u64, Ordering::Relaxed);
+                } else {
+                    REFUSED_AT.store(now_millis(), Ordering::Relaxed);
+                }
+            }
+            Exchange::Missing => {
                 // The Mac may have gone to sleep or taken a new address: drop
                 // what we knew so the next tick probes for it again. The body
                 // goes back, unless a newer one was offered meanwhile — those
                 // changes must reach the Mac even though this attempt failed.
-                {
-                    let mut outbox = OUTBOX.lock().unwrap();
-                    if outbox.is_none() {
-                        *outbox = Some(body);
-                    }
-                }
+                put_back(body);
                 *PEER.lock().unwrap() = None;
                 *UNREACHABLE.lock().unwrap() = true;
             }
         }
         thread::sleep(Duration::from_millis(1500));
+    }
+}
+
+/// Hands an unanswered body back to the exchange thread, unless the app has
+/// offered a newer one meanwhile: those changes have to reach the Mac too.
+fn put_back(body: String) {
+    let mut outbox = OUTBOX.lock().unwrap();
+    if outbox.is_none() {
+        *outbox = Some(body);
     }
 }
 
@@ -440,14 +548,40 @@ fn handle(mut stream: TcpStream) {
     };
     let body = String::from_utf8_lossy(&buf[head_end..]).to_string();
 
-    match (method, path) {
-        ("GET", "/health") => match board::with(|db| board::counts(&db.conn)) {
-            Ok((cards, tags, at)) => {
+    // The board is served on the LAN, which at a coffee shop is everyone's LAN.
+    // So the two endpoints that touch it want a proof that this phone knows the
+    // six digits on the Mac's own title bar. `/health` and `/challenge` stay
+    // open: one says a Mac is here, the other hands out the nonce a proof is
+    // made over, and neither reads or writes a card.
+    if path == "/state" {
+        match auth::admit(&head) {
+            auth::Verdict::Ok => {}
+            auth::Verdict::Unauthorized => {
+                let _ = respond(&mut stream, 401, "{\"error\":\"unauthorized\"}");
+                return;
+            }
+            auth::Verdict::Locked(left) => {
+                // The wait is named so a client knows not to try again sooner:
+                // a phone that hammered at a locked Mac would keep it locked.
                 let _ = respond(
                     &mut stream,
-                    200,
-                    &json!({ "ok": true, "cards": cards, "tags": tags, "at": at }).to_string(),
+                    429,
+                    &json!({ "error": "too many attempts", "retry": left.as_secs() }).to_string(),
                 );
+                return;
+            }
+        }
+    }
+
+    match (method, path) {
+        // Only that it is there: how many cards the board holds is the user's
+        // business, and this endpoint answers anyone on the network.
+        ("GET", "/health") => {
+            let _ = respond(&mut stream, 200, "{\"ok\":true}");
+        }
+        ("GET", "/challenge") => match auth::challenge() {
+            Ok(answer) => {
+                let _ = respond(&mut stream, 200, &answer);
             }
             Err(e) => {
                 let _ = respond(&mut stream, 500, &json!({"error": e}).to_string());
@@ -504,6 +638,10 @@ fn respond(stream: &mut TcpStream, status: u16, body: &str) -> std::io::Result<(
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
+        401 => "Unauthorized",
+        404 => "Not Found",
+        // The door is locked rather than the request malformed.
+        429 => "Too Many Requests",
         500 => "Internal Server Error",
         _ => "Not Found",
     };
@@ -663,10 +801,31 @@ impl Sync {
     /// time, and when it last did (millis since the epoch; 0 for never).
     pub fn status() -> String {
         let peer = PEER.lock().unwrap().clone().unwrap_or_default();
+        let now = now_millis();
+        let retry = RETRY_AT.load(Ordering::Relaxed);
+        let locked = retry > now;
+        // Why an exchange is not happening, in one word the app can draw:
+        // `need` — this phone has no code yet; `locked` — the Mac asked it to
+        // wait; `wrong` — the Mac did not take the code; `ok` — nothing in the
+        // way. A lock outranks a refusal: both are true, and only one is advice
+        // the user can act on.
+        let pair = if !auth::has_prover() {
+            "need"
+        } else if locked {
+            "locked"
+        } else if REFUSED_AT.load(Ordering::Relaxed) != 0 {
+            "wrong"
+        } else {
+            "ok"
+        };
         json!({
             "peer": peer,
             "unreachable": *UNREACHABLE.lock().unwrap(),
             "at": SYNCED_AT.load(Ordering::Relaxed),
+            "pair": pair,
+            // Seconds left of the Mac's lockout, rounded up so a client never
+            // comes back a moment early and starts the minute again.
+            "retry": if locked { (retry - now).div_ceil(1000) } else { 0 },
         })
         .to_string()
     }
@@ -689,6 +848,46 @@ impl Sync {
     /// runs where there is no exchange thread, so it is harmless everywhere else.
     pub fn nudge() {
         NUDGE.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Adopts `code` as the six digits this Mac answers to.
+    ///
+    /// The app keeps the digits (one key in the device's own storage) and hands
+    /// them back at launch: the board's file is the user's work, and its tables
+    /// are not the place for this. The crate holds the code in memory, which is
+    /// exactly as long as the port is open.
+    pub fn host_code(code: String) -> Result<(), String> {
+        if !auth::is_code(&code) {
+            return Err("a pairing code is six digits".to_owned());
+        }
+        auth::serving().set_code(&code);
+        Ok(())
+    }
+
+    /// Makes a new pairing code, adopts it, and returns it for the app to keep.
+    ///
+    /// Everything the old code opened closes with it: the challenges handed out
+    /// for it are gone and its lockout is cleared, so the phone that guessed
+    /// wrong can try again — with the new digits, which it has to be given.
+    pub fn new_code() -> Result<String, String> {
+        let code = auth::new_code()?;
+        auth::serving().set_code(&code);
+        Ok(code)
+    }
+
+    /// Adopts `code` as the one this phone proves it knows; `""` forgets the
+    /// one it had, which is what a launch with nothing in storage hands over.
+    pub fn set_code(code: String) -> Result<(), String> {
+        if !code.is_empty() && !auth::is_code(&code) {
+            return Err("a pairing code is six digits".to_owned());
+        }
+        auth::set_prover(&code);
+        // A new code is a new attempt: the refusal and the lockout belonged to
+        // the old digits. The exchange thread is woken so it tries them now.
+        REFUSED_AT.store(0, Ordering::Relaxed);
+        RETRY_AT.store(0, Ordering::Relaxed);
+        NUDGE.fetch_add(1, Ordering::Relaxed);
+        Ok(())
     }
 }
 

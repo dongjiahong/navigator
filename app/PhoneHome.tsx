@@ -47,7 +47,8 @@ import {
 import { fieldHeight } from "./text";
 import { hueColor, onFill, theme, onAccentFill, onAccentWash, TYPE } from "./theme";
 import { dismissDue, dueNow } from "./reminders";
-import { connectTo, detail, endpoint, phase, start, statusLine, syncNow } from "./sync";
+import { connectTo, detail, endpoint, pairLine, pairWith, phase, start, statusLine, syncNow } from "./sync";
+import { canPair, digits, pairCode } from "./pairing";
 
 const active = signal<Status>("todo");
 const openId = signal<string | null>(null);
@@ -86,6 +87,8 @@ const draftDue = signal<string | undefined>(undefined);
 /** The sheet where the phone is told which Mac to follow. */
 const linking = signal(false);
 const draftAddress = signal("");
+/** The six digits being typed into that sheet, digits only. */
+const draftCode = signal("");
 /**
  * Whether 添加 keeps the capture sheet open for the next card.
  *
@@ -946,10 +949,28 @@ function DetailBody(props: { id: string }) {
 }
 
 /**
- * Which Mac this phone follows. The Mac shows its address in its own header;
- * typing it here is the whole pairing step, because the service has no accounts.
+ * Pairing with the Mac: the six digits from its title bar, and — only for a
+ * network that drops broadcasts — its address.
+ *
+ * The code is the part that matters: without it the Mac will not answer, so the
+ * address field is the fallback and sits under the code. A phone pairs once; the
+ * digits are kept on the device, and this sheet is reached again only to pair
+ * with another Mac or to replace a code that was regenerated.
  */
 function LinkSheet() {
+  /** Whether the code is whole yet: what makes 配对 worth pressing. */
+  const ready = () => canPair(draftCode());
+
+  /** Saves the digits (and the address, if one was typed) and goes. */
+  const pair = async () => {
+    if (!ready()) return;
+    const address = draftAddress().trim();
+    if (address) await connectTo(address);
+    if (!(await pairWith(draftCode()))) return;
+    draftCode.set("");
+    linking.set(false);
+  };
+
   return (
     <Sheet
       open={linking()}
@@ -969,7 +990,36 @@ function LinkSheet() {
         </View>
         <Text style={{ fontSize: 17, fontWeight: "600", color: theme().text }}>连到 Mac</Text>
         <Text style={{ fontSize: 13, lineHeight: 19, color: theme().textSecondary }}>
-          同一个 Wi-Fi 下会自动找到 Mac，不用填地址。找不到时，才把 Mac 标题栏里的地址填进来。
+          在 Mac 标题栏的「配对码」里找到 6 位数字。同一个 Wi-Fi 下会自动找到 Mac，只要对一次。
+        </Text>
+        <Input
+          testID="link-code"
+          value={draftCode()}
+          placeholder="482 913"
+          // The digits' own keyboard: a code is typed with a thumb, and a full
+          // keyboard puts letters between the thumb and the six numbers.
+          keyboardType="number-pad"
+          maxLength={6}
+          autoFocus
+          onChange={({ value }) => draftCode.set(digits(value))}
+          style={{
+            fontSize: 22,
+            letterSpacing: 3,
+            color: theme().text,
+            placeholderColor: theme().textTertiary,
+            height: 52,
+            padding: 0,
+          }}
+        />
+        {/* What the code is doing, if the Mac has already said something: a
+            refusal and a lockout are the two things worth knowing here. */}
+        <If when={pairLine() !== "" && pairLine() !== "需要配对码"}>
+          <Text testID="link-code-note" style={{ fontSize: 12.5, color: theme().textSecondary }}>
+            {pairLine()}
+          </Text>
+        </If>
+        <Text style={{ fontSize: 12.5, lineHeight: 18, color: theme().textTertiary }}>
+          找不到 Mac 时，才把 Mac 标题栏里的地址填进来。
         </Text>
         <Input
           testID="link-address"
@@ -990,25 +1040,28 @@ function LinkSheet() {
             {detail()}
           </Text>
         ) : null}
+        {/* 48dp of accent when it can fire, the tinted wash when the code is not
+            whole yet. `accessibilityState`, not `disabled`: a button that drops
+            its whole affordance looks live and is not. */}
         <View
           testID="link-save"
-          onPress={() => {
-            const address = draftAddress().trim();
-            if (!address) return;
-            connectTo(address);
-            linking.set(false);
-          }}
+          onPress={() => void pair()}
           role="button"
-          accessibilityLabel="开始同步"
+          accessibilityLabel="配对"
+          accessibilityState={{ disabled: !ready() }}
           style={{
-            height: 46,
+            height: 48,
             borderRadius: 12,
-            backgroundColor: theme().accent,
+            backgroundColor: ready()
+              ? theme().accent
+              : alpha(theme().accent, theme().dark ? 0.14 : 0.09),
             alignItems: "center",
             justifyContent: "center",
           }}
         >
-          <Text style={{ fontSize: 15, fontWeight: "600", color: onAccentFill() }}>开始同步</Text>
+          <Text style={{ fontSize: 15, fontWeight: "600", color: ready() ? onAccentFill() : onAccentWash() }}>
+            配对
+          </Text>
         </View>
         {/* A fresh install opens on fourteen written cards. Once the board is
             the user's own they are noise in every column, and this is where the
@@ -1248,6 +1301,7 @@ export function PhoneHome() {
             testID="phone-sync"
             onPress={() => {
               draftAddress.set(endpoint());
+              draftCode.set(pairCode());
               linking.set(true);
             }}
             role="button"

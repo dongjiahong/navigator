@@ -2,6 +2,7 @@ import { Text, View, effect, keymap, lifecycle, mount, signal, windowSize } from
 import { isAvailable as hasWindow, Window } from "nsh/desktop";
 import { MacBoard } from "./MacBoard";
 import { Inspector } from "./Inspector";
+import { PairCodeLink, PairDialog } from "./PairDialog";
 import { PhoneHome } from "./PhoneHome";
 import { CommandPalette, closePalette, openPalette, paletteOpen } from "./palette";
 import { adoptWindowChrome, headerHeight, titleSpacer } from "./chrome";
@@ -21,7 +22,7 @@ import { isFiltering, searchQuery, tagFilter } from "./filters";
 import { adopt, focusId, focusedCard, keepFocus, moveFocus, shiftFocus } from "./focus";
 import { MIN_WINDOW } from "./geom";
 import { hydrate, startPersist } from "./persist";
-import { nudgeSync, phase, start, statusLine } from "./sync";
+import { nudgeSync, openPairCode, phase, start, statusLine } from "./sync";
 import { startReminders } from "./reminders";
 import { theme, onAccentWash } from "./theme";
 import {
@@ -168,6 +169,7 @@ function MacShell() {
             <Text style={{ fontSize: 15, fontWeight: "600", color: theme().text, letterSpacing: 0 }}>领航</Text>
             <View style={{ width: 12 }} />
             <SyncNote />
+            <PairCodeLink />
             <View style={{ flex: 1 }} />
             <View
               testID="new-card"
@@ -396,6 +398,7 @@ export function App() {
           back on the board exactly where it was. */}
       <CommandPalette
         onNew={() => createIn("todo")}
+        onPair={() => void openPairCode()}
         onOpen={(id) => {
           adopt(id);
           selectedId.set(id);
@@ -405,6 +408,9 @@ export function App() {
       {/* One month for both layouts, for the same reason: the deadline editor on
           the Mac's card and on the phone's sheet opens the same calendar. */}
       <DueCalendar />
+      {/* The six digits a phone proves it knows. A panel over the board, like
+          every other thing the Mac opens: nothing moves to show it. */}
+      <PairDialog />
       {/* One undo line for both layouts, at the foot of the surface: a delete, a
           completion and an archive are all one press from being taken back, and
           the app says so in the same place whichever device did it. */}

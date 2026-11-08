@@ -16,6 +16,12 @@ libc = "0.2"
 # The board's file. Bundled: SQLite is compiled in rather than found on the
 # host, because an Android app has no system one to link against.
 rusqlite = { version = "0.41.1", features = ["bundled"] }
+# The pairing code's proof. A phone proves it knows the Mac's six digits with an
+# HMAC of a one-time challenge, and the comparison is constant-time; none of the
+# three is worth writing by hand when the crates are this small and this old.
+sha2 = "0.11.1"
+hmac = "0.13.0"
+subtle = "2.6.1"
 
 # Deadline reminders. nsh has no notification API, so the Mac's go through the
 # system's own notification centre here: it owns the schedule, delivers while

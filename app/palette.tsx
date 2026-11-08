@@ -24,7 +24,8 @@ export type CommandKind =
   | "unfilter"
   | "clear-archive"
   | "clear-samples"
-  | "tags";
+  | "tags"
+  | "pair";
 
 export type Command = {
   /** Stable within one open palette, and the row's test id. */
@@ -122,6 +123,15 @@ export function rankCommands(query: string, all: Card[], tags: Tag[]): Command[]
 
   offer({ id: "tags", kind: "tags", label: "标签管理" }, "标签管理 标签 tag", 80);
 
+  // The six digits a phone proves it knows. It lives in the Mac's title band
+  // already; the palette carries it too because a reader who is looking for it
+  // tries the field before the corner of the window.
+  offer(
+    { id: "pair", kind: "pair", label: "显示配对码" },
+    "显示配对码 配对码 配对 手机 pair code",
+    75,
+  );
+
   for (const tag of tags) {
     offer(
       { id: `tag-${tag.id}`, kind: "tag", tagId: tag.id, hue: tag.hue, label: `按标签筛选：${tag.label}` },
@@ -208,7 +218,11 @@ function step(by: number): void {
  * lifted shadow, no border. Its rows are text and — for a tag — that tag's dot,
  * which is the only colour the board allows a row.
  */
-export function CommandPalette(props: { onNew: () => void; onOpen: (id: string) => void }) {
+export function CommandPalette(props: {
+  onNew: () => void;
+  onOpen: (id: string) => void;
+  onPair: () => void;
+}) {
   /** Runs the row `id` names, and closes. */
   const run = (id: string) => {
     // One press runs one row: the return key arrives from more than one place
@@ -239,6 +253,9 @@ export function CommandPalette(props: { onNew: () => void; onOpen: (id: string) 
         break;
       case "tags":
         managingTags.set(true);
+        break;
+      case "pair":
+        props.onPair();
         break;
     }
   };
@@ -424,7 +441,9 @@ function selectedId(): string | null {
 }
 
 /** The glyph a verb carries, from the board's own icon set. */
-function commandGlyph(kind: CommandKind): "plus" | "archive" | "tag" | "inbox" | "chevron" | "close" {
+function commandGlyph(
+  kind: CommandKind,
+): "plus" | "archive" | "tag" | "inbox" | "chevron" | "close" | "link" {
   switch (kind) {
     case "new":
       return "plus";
@@ -435,6 +454,8 @@ function commandGlyph(kind: CommandKind): "plus" | "archive" | "tag" | "inbox" |
     case "tags":
     case "tag":
       return "tag";
+    case "pair":
+      return "link";
     case "unfilter":
       return "inbox";
     default:
