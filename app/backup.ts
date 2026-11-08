@@ -1,5 +1,6 @@
-import { COLUMNS, type Card, type Stamps, type Status, type Tag } from "./data";
+import { COLUMNS, type Card, type Repeat, type Stamps, type Status, type Tag } from "./data";
 import { MERGE_FIELDS, allFields } from "./fields";
+import { REPEATS } from "./repeat";
 import { HUES, type Hue } from "./theme";
 
 /**
@@ -143,6 +144,10 @@ function asCard(item: unknown): Card | null {
     updatedAt: typeof row.updatedAt === "number" && Number.isFinite(row.updatedAt) ? row.updatedAt : 0,
   };
   if (typeof row.due === "string" && row.due) card.due = row.due;
+  // A cycle without a deadline is not a cycle, and an unknown one is not this
+  // version's: either way it is dropped rather than carried as a word nothing
+  // reads.
+  if (card.due && REPEATS.some((r) => r === row.repeat)) card.repeat = row.repeat as Repeat;
   // A file that came out of the daily snapshot carries tombstones, and they are
   // kept: merging one back has to know which ids were removed.
   if (row.deleted === true) card.deleted = true;
@@ -247,6 +252,7 @@ function sameCard(a: Card, b: Card): boolean {
     a.notes === b.notes &&
     a.status === b.status &&
     (a.due ?? "") === (b.due ?? "") &&
+    (a.repeat ?? "") === (b.repeat ?? "") &&
     a.tags.join("\u0000") === b.tags.join("\u0000")
   );
 }

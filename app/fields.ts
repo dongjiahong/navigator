@@ -10,9 +10,18 @@ import type { Card, Stamps } from "./data";
  *
  * `id` is not in the list: it is the key, not a value. Everything else a card
  * holds is, including `deleted` (a delete is a field written on the card, not a
- * card that vanished) and `rank` (where the card sits in its column).
+ * card that vanished), `rank` (where the card sits in its column) and `repeat`
+ * (how often it comes back).
  */
-export type MergeField = "title" | "notes" | "tags" | "due" | "status" | "deleted" | "rank";
+export type MergeField =
+  | "title"
+  | "notes"
+  | "tags"
+  | "due"
+  | "repeat"
+  | "status"
+  | "deleted"
+  | "rank";
 
 /** Every mergeable field, in the order this file writes them down. */
 export const MERGE_FIELDS: readonly MergeField[] = [
@@ -20,6 +29,7 @@ export const MERGE_FIELDS: readonly MergeField[] = [
   "notes",
   "tags",
   "due",
+  "repeat",
   "status",
   "deleted",
   "rank",

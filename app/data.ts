@@ -1,8 +1,16 @@
 import { computed, signal } from "nsh";
 import { allFields, fieldValue, MERGE_FIELDS, tieKey, type MergeField } from "./fields";
+import { finishedAt, isUntouched, successorOf } from "./repeat";
 import { HUES, type Hue } from "./theme";
 
 export type Status = "todo" | "doing" | "done" | "archive";
+
+/**
+ * How often a card comes back. The next occurrence is made when one is
+ * finished — see `repeat.ts` for the date rule and `recurrence.ts` for the card
+ * it makes.
+ */
+export type Repeat = "daily" | "weekly" | "monthly" | "yearly";
 
 /** When each field of a card was last written. See `fields.ts`. */
 export type Stamps = Partial<Record<MergeField, number>>;
@@ -14,6 +22,12 @@ export type Card = {
   tags: string[];
   /** ISO local time, e.g. `2026-11-07T15:15`. */
   due?: string;
+  /**
+   * How often the card comes back, and the deadline of the next occurrence is
+   * this one advanced by the cycle. A card with no `due` has nothing to repeat
+   * from, so the two go together: clearing the deadline clears this too.
+   */
+  repeat?: Repeat;
   status: Status;
   /**
    * Where the card sits in its column, ascending. It is data, not a local
@@ -515,24 +529,50 @@ export function byStatus(status: Status): Card[] {
   return board().filter((c) => c.status === status);
 }
 
-export function addCard(partial: Pick<Card, "title" | "notes" | "tags" | "due">) {
-  const id = newId("c");
+/**
+ * The fields a card is made with. `status`, `rank` and the stamps are the
+ * board's to give: a new card goes to 待办, at the foot of it.
+ */
+export type Draft = Pick<Card, "title" | "notes" | "tags" | "due" | "repeat">;
+
+/**
+ * Cards made now, in one write.
+ *
+ * One write rather than one per card because the board is one board: the
+ * repeating rule can find two cards missing their next occurrence in the same
+ * pass (both finished while the app was closed), and the screen should see one
+ * change rather than a card at a time.
+ *
+ * `id` is given by the caller for an occurrence of a repeated card, whose id is
+ * derived from the card it came from; ordinary cards get a fresh one.
+ */
+export function addCards(drafts: readonly { card: Draft; id?: string }[]): string[] {
   const stamp = now();
+  const ids: string[] = [];
   cards.update((all) => {
-    const created: Card = {
-      id,
-      status: "todo",
-      rank: endRank(all, "todo"),
-      // A card is written whole when it is made: every field is as new as the
-      // card, which is what lets two cards made at once on two devices still
-      // have a field each to lose.
-      stamps: allFields(stamp),
-      updatedAt: stamp,
-      ...partial,
-    };
-    return [...all, created];
+    const out = [...all];
+    for (const { card, id } of drafts) {
+      const made = id ?? newId("c");
+      ids.push(made);
+      out.push({
+        id: made,
+        status: "todo",
+        rank: endRank(out, "todo"),
+        // A card is written whole when it is made: every field is as new as the
+        // card, which is what lets two cards made at once on two devices still
+        // have a field each to lose.
+        stamps: allFields(stamp),
+        updatedAt: stamp,
+        ...card,
+      });
+    }
+    return out;
   });
-  return id;
+  return ids;
+}
+
+export function addCard(partial: Draft): string {
+  return addCards([{ card: partial }])[0];
 }
 
 export function patchCard(id: string, patch: Partial<Card>) {
@@ -761,9 +801,40 @@ export function setStatus(id: string, status: Status): void {
   const row = cards().filter((c) => c.status === before && !c.deleted).sort(byRank).findIndex((c) => c.id === id);
   patchCard(id, { status });
   if (status !== "done" && status !== "archive") return;
-  offerUndo(`${status === "archive" ? "已归档" : "已完成"}「${nameOf(card)}」`, () =>
-    moveCard(id, before, Math.max(0, row)),
+  // Finishing a repeating card also says when it comes back: the same
+  // occurrence the rule will make, read off the card's own completion stamp
+  // rather than this device's clock. One clause of the same line, not a second
+  // offer on the screen.
+  const written = cards().find((c) => c.id === id);
+  const next = written ? successorOf(written, finishedAt(written)) : null;
+  const again = next ? dueLabel(next.due).text : "";
+  offerUndo(
+    `${status === "archive" ? "已归档" : "已完成"}「${nameOf(card)}」${again ? `，下次 ${again}` : ""}`,
+    () => {
+      // The occurrence this completion made goes with the way back — but only
+      // while it is still exactly what was made. Once it has been typed in or
+      // moved, it is the user's card and the undo leaves it alone.
+      dropSuccessor(id);
+      moveCard(id, before, Math.max(0, row));
+    },
   );
+}
+
+/**
+ * Removes the next occurrence a completion made, if nobody has touched it.
+ *
+ * The id is derived from the card and the moment it was finished, so it can be
+ * worked out again here rather than remembered anywhere: the same function that
+ * made the card names it.
+ */
+function dropSuccessor(id: string): void {
+  const card = cards().find((c) => c.id === id);
+  if (!card) return;
+  const next = successorOf(card, finishedAt(card));
+  if (!next) return;
+  const made = cards().find((c) => c.id === next.id);
+  if (!made || made.deleted || !isUntouched(made)) return;
+  removeCard(made.id);
 }
 
 /** Every card still on the board, without tombstones. */

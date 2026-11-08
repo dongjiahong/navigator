@@ -112,9 +112,9 @@ pub fn stamp(item: &Value) -> i64 {
 
 /// The fields a card is merged on, one at a time. Kept in step with
 /// `app/fields.ts`: `id` is the key rather than a value, and everything else a
-/// card holds — including `deleted` and `rank` — is a field both devices may
-/// have written.
-const MERGE_FIELDS: [&str; 7] = ["title", "notes", "tags", "due", "status", "deleted", "rank"];
+/// card holds — including `deleted`, `rank` and `repeat` — is a field both
+/// devices may have written.
+const MERGE_FIELDS: [&str; 8] = ["title", "notes", "tags", "due", "repeat", "status", "deleted", "rank"];
 
 /// When one field of a card was last written.
 ///
@@ -538,6 +538,34 @@ mod tests {
         upsert(&mut conn, &[card("a", 20, json!({"title": "back?"}))], &[]).unwrap();
         let board = loaded(&conn);
         assert_eq!(board["cards"][0]["deleted"], true);
+    }
+
+    /// A cycle is a field like any other, and it has to survive the trip: the
+    /// phone marks a card 每天, the Mac has not heard of the field yet, and the
+    /// card that comes out still repeats.
+    #[test]
+    fn a_cycle_written_on_one_device_reaches_the_other() {
+        let mut conn = store();
+        upsert(
+            &mut conn,
+            &[card(
+                "a",
+                20,
+                json!({
+                    "due": "2026-11-12T08:00",
+                    "repeat": "daily",
+                    "stamps": {"title": 1, "due": 20, "repeat": 20},
+                }),
+            )],
+            &[],
+        )
+        .unwrap();
+        // The Mac's copy predates the cycle and knows nothing of the field.
+        upsert(&mut conn, &[card("a", 10, json!({"title": "from the Mac", "stamps": {"title": 10}}))], &[]).unwrap();
+        let board = loaded(&conn);
+        assert_eq!(board["cards"][0]["repeat"], "daily");
+        assert_eq!(board["cards"][0]["title"], "from the Mac");
+        assert_eq!(board["cards"][0]["stamps"]["repeat"], 20);
     }
 
     /// The cases the interface's merge is run against, run here too.

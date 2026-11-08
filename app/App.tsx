@@ -23,6 +23,7 @@ import { isFiltering, searchQuery, tagFilter } from "./filters";
 import { adopt, clearFocus, focusId, focusedCard, keepFocus, moveFocus, shiftFocus } from "./focus";
 import { MIN_WINDOW } from "./geom";
 import { hydrate, startPersist } from "./persist";
+import { startRecurrence } from "./recurrence";
 import { nudgeSync, phase, start, statusLine } from "./sync";
 import { installReminders, openRequested, startReminders } from "./reminders";
 import { theme, onAccentWash } from "./theme";
@@ -279,6 +280,10 @@ async function boot() {
   // Finished work is filed before the reminders read the board, so a card that
   // is about to leave 已完成 never gets a notification on its way out.
   startAutoArchive();
+  // Then the repeating cards' next occurrence, for a completion made while the
+  // app was closed or one the phone made last night. Started after the filing:
+  // work that has just been archived is no longer a completion to repeat.
+  startRecurrence();
   startReminders();
   startBadge();
 }
