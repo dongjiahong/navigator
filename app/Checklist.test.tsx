@@ -92,13 +92,13 @@ test("the panel ticks a note's checklist, and the card counts it", async () => {
   await app.waitFor("id:inspector-notes");
   // The note is still a plain field: the checklist is typed into it.
   await app.type("id:inspector-notes", LIST);
-  await app.wait(400);
+  await app.waitFor("id:checklist-toggle-2");
 
   // Three items, one ticked — and the card on the board says so in its meta row.
   expect(app.shows("id:checklist")).toBe(true);
   expect(app.shows("id:checklist-toggle-2")).toBe(true);
   await app.press("label:关闭");
-  await app.wait(300);
+  await app.waitFor("id:col-todo >> text:1/3");
   expect(app.shows("id:col-todo >> text:1/3")).toBe(true);
 
   // A press is a write to the note: the item's own line flips, the rest stays.
@@ -115,7 +115,7 @@ test("the panel ticks a note's checklist, and the card counts it", async () => {
   await app.wait(400);
   expect(app.value("id:inspector-notes")).toContain("- [ ] ");
   await app.press("label:关闭");
-  await app.wait(300);
+  await app.waitFor("id:col-todo >> text:0/4");
   expect(app.shows("id:col-todo >> text:0/4")).toBe(true);
 });
 
@@ -127,7 +127,9 @@ test("a note with more than six items says how many are left", async () => {
   await app.waitFor("id:inspector-notes");
   const many = Array.from({ length: 8 }, (_, i) => `\n- [ ] 第 ${i + 1} 项`).join("");
   await app.type("id:inspector-notes", many);
-  await app.wait(400);
+  // The rows appear when the note has been patched and re-read; waiting for the
+  // sixth is the real condition, where a fixed pause only holds on an idle machine.
+  await app.waitFor("id:checklist-toggle-6");
 
   // Six rows are shown and the rest are counted; the rows are not the editor.
   expect(app.shows("id:checklist-toggle-6")).toBe(true);
@@ -143,7 +145,7 @@ test("a checklist in a short window leaves the note a field, not a stripe", asyn
   await app.press("id:card-c2");
   await app.waitFor("id:inspector-notes");
   await app.type("id:inspector-notes", Array.from({ length: 6 }, (_, i) => `\n- [ ] 第 ${i + 1} 项`).join(""));
-  await app.wait(400);
+  await app.waitFor("id:checklist-toggle-5");
 
   // The note is still there to type in, the rows are under it, and the panel's
   // own controls are still on the surface: nothing has been pushed off.
@@ -162,7 +164,7 @@ test("the phone's sheet ticks the same checklist", async () => {
   await app.press("id:row-c2");
   await app.waitFor("id:detail-notes");
   await app.type("id:detail-notes", LIST);
-  await app.wait(400);
+  await app.waitFor("id:checklist-toggle-2");
 
   expect(app.shows("id:checklist-toggle-2")).toBe(true);
   await app.press("label:组合形态");
@@ -171,6 +173,6 @@ test("the phone's sheet ticks the same checklist", async () => {
 
   // The row behind the sheet counts it, too.
   await app.press("label:关闭");
-  await app.wait(300);
+  await app.waitFor("id:phone-col-todo >> text:0/3");
   expect(app.shows("id:phone-col-todo >> text:0/3")).toBe(true);
 });
