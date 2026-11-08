@@ -2,6 +2,16 @@ import { Storage, platform, signal } from "nsh";
 import { Board, Sync } from "app/native";
 import { cards, tags, type Card, type Tag } from "./data";
 import { mergeBoards, mergeTags, sameBoard, sameById } from "./merge";
+import {
+  digits,
+  pairCode,
+  pairLine,
+  pairOpen,
+  pairState,
+  readPair,
+  saveCode,
+  storedCode,
+} from "./pairing";
 import { flush, markSent, outgoing, rememberRows } from "./persist";
 
 export { mergeBoards, mergeTags, sameBoard } from "./merge";
@@ -45,6 +55,10 @@ export const detail = signal<string>("");
 export const endpoint = signal<string>("");
 /** Millis of the last successful exchange, for the "已同步" line. */
 export const syncedAt = signal<number>(0);
+
+// The code's state, and the line that says it, live in `pairing`: they are read
+// by both devices, and by tests that must not import the crate.
+export { pairLine, pairState };
 
 const PORT = 8787;
 /** How often the Mac reads the file back for what the phone wrote into it. */
@@ -126,6 +140,9 @@ let timer: ReturnType<typeof setInterval> | null = null;
 export async function startHost(): Promise<void> {
   if (!isHost()) return;
   try {
+    // The code before the port: a Mac that is listening without one admits
+    // nobody, and a phone with the right digits could never prove it.
+    await ensureHostCode();
     const bound = Sync.start(PORT);
     const url = Sync.address(bound);
     endpoint.set(url);
@@ -161,7 +178,7 @@ function hostTick() {
 }
 
 /** What the crate says about the Mac it is talking to. */
-type Status = { peer: string; unreachable: boolean; at: number };
+type Status = { peer: string; unreachable: boolean; at: number; pair?: string; retry?: number };
 
 /** The phone's tick: save, take in what came back, hand over what changed. */
 function tick() {
@@ -200,6 +217,12 @@ function tick() {
 
   const url = status.peer ? `http://${status.peer}` : "";
   if (url !== endpoint()) endpoint.set(url);
+
+  // The code, before the connection: a Mac that answers and will not let this
+  // phone in is a different thing from a Mac that is not there, and it is the
+  // one the user can fix in a moment.
+  const pairing = readPair(status);
+  if (pairState() !== pairing) pairState.set(pairing);
 
   if (status.unreachable) {
     if (phase() !== "error") {
@@ -243,6 +266,18 @@ export async function start(): Promise<void> {
   // moment it stops answering and probes for the Mac again.
   const saved = await Storage.getItem(ADDRESS_KEY);
   if (saved) Sync.useAddress(saved);
+  // The digits a previous pairing left behind. Without them the service would
+  // refuse this phone, so it says so before it says anything else — and stops
+  // asking, because five refusals close the Mac's door for a minute. An empty
+  // string is "this phone has none", which the crate takes as forgetting one it
+  // was given by an earlier launch in the same process.
+  const code = await storedCode();
+  try {
+    Sync.setCode(code);
+  } catch (error) {
+    console.log(`[navigator] the pairing code could not be adopted: ${error}`);
+  }
+  if (!code) pairState.set("need");
   Sync.watch();
   timer = setInterval(tick, TICK_MS);
   tick();
@@ -257,6 +292,86 @@ export async function connectTo(address: string): Promise<void> {
   syncedAt.set(0);
   phase.set("synced");
   detail.set("");
+}
+
+/**
+ * Pairs this phone with the Mac whose six digits were typed, and starts.
+ *
+ * The digits are the only thing standing between a phone and the board, so the
+ * address is optional and the code is not: a phone that has one will find the
+ * Mac on its own.
+ *
+ * `false` when the text is not six digits, so the sheet knows not to close on
+ * a press that could not have done anything.
+ */
+export async function pairWith(code: string): Promise<boolean> {
+  const six = digits(code);
+  if (six.length !== 6) return false;
+  try {
+    // The crate takes the digits as this phone's answer; a refusal here is a
+    // code that is not six digits, which the field already prevents.
+    Sync.setCode(six);
+  } catch (error) {
+    console.log(`[navigator] pairing code refused: ${error}`);
+    return false;
+  }
+  await saveCode(six);
+  // A new code is a new attempt: the refusal and the lockout went with the old
+  // digits, in the crate and here.
+  pairState.set("ok");
+  syncedAt.set(0);
+  if (phase() !== "off") {
+    phase.set("off");
+    detail.set("正在查找 Mac");
+  }
+  tick();
+  return true;
+}
+
+/**
+ * The Mac's code, made and kept the first time it is wanted.
+ *
+ * Called before the service starts, so a Mac that is serving always has one: a
+ * Mac with no code admits nobody, which is the safe way round — but it would
+ * also mean a phone that could never pair.
+ */
+export async function ensureHostCode(): Promise<string> {
+  try {
+    const saved = await storedCode();
+    if (saved) {
+      // The crate is told which digits it answers to; the storage is the
+      // record, and the crate only holds it while the port is open.
+      Sync.hostCode(saved);
+      pairCode.set(saved);
+      return saved;
+    }
+    return await regenerateHostCode();
+  } catch (error) {
+    // No code, no pairing: the board stays closed to the network until the app
+    // can make one, and the Mac's own board is untouched by that.
+    console.log(`[navigator] no pairing code: ${error}`);
+    return "";
+  }
+}
+
+/**
+ * A new code, kept, and the old one stops working as it is made.
+ *
+ * The old digits are the only thing that opened the door, so replacing them is
+ * how the user says "no more": every phone that knew them is asked for the new
+ * ones on its next exchange.
+ */
+export async function regenerateHostCode(): Promise<string> {
+  const code = digits(Sync.newCode());
+  Sync.hostCode(code);
+  await saveCode(code);
+  return code;
+}
+
+/** Puts the Mac's code on screen, making one first if it has never had one. */
+export async function openPairCode(): Promise<void> {
+  const code = await ensureHostCode();
+  if (code) pairOpen.set(true);
 }
 
 /**
@@ -293,6 +408,11 @@ export function nudgeSync(): void {
 /** A one-line status for the header. */
 export function statusLine(): string {
   if (detail() === "同步已关闭") return "未同步";
+  // The code first: a Mac that answers and will not let this phone in has not
+  // "failed to sync", and telling the user it had would send them looking at
+  // the network for something the pairing sheet fixes in one press.
+  const pairing = pairLine();
+  if (pairing) return pairing;
   if (phase() === "error") return detail() || "同步出错";
   // "查找中" rather than "未连接": on a phone the first seconds are spent
   // probing the network, and that is not the same as being alone.

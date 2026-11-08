@@ -30,7 +30,8 @@ export type CommandKind =
   | "export-json"
   | "export-markdown"
   | "import"
-  | "restore";
+  | "restore"
+  | "pair";
 
 export type Command = {
   /** Stable within one open palette, and the row's test id. */
@@ -134,6 +135,15 @@ export function rankCommands(
   }
 
   offer({ id: "tags", kind: "tags", label: "标签管理" }, "标签管理 标签 tag", 80);
+
+  // The six digits a phone proves it knows. It lives in the Mac's title band
+  // already; the palette carries it too because a reader who is looking for it
+  // tries the field before the corner of the window.
+  offer(
+    { id: "pair", kind: "pair", label: "显示配对码" },
+    "显示配对码 配对码 配对 手机 pair code",
+    75,
+  );
 
   for (const tag of tags) {
     offer(
@@ -266,6 +276,7 @@ export function CommandPalette(props: {
   onExport: (kind: "json" | "markdown") => void;
   onImport: () => void;
   onRestore: () => void;
+  onPair: () => void;
 }) {
   /** Runs the row `id` names, and closes. */
   const run = (id: string) => {
@@ -312,6 +323,9 @@ export function CommandPalette(props: {
         break;
       case "restore":
         props.onRestore();
+        break;
+      case "pair":
+        props.onPair();
         break;
     }
   };
@@ -497,7 +511,9 @@ function selectedId(): string | null {
 }
 
 /** The glyph a verb carries, from the board's own icon set. */
-function commandGlyph(kind: CommandKind): "plus" | "archive" | "tag" | "inbox" | "chevron" | "close" | "calendar" {
+function commandGlyph(
+  kind: CommandKind,
+): "plus" | "archive" | "tag" | "inbox" | "chevron" | "close" | "calendar" | "link" {
   switch (kind) {
     case "new":
       return "plus";
@@ -509,6 +525,8 @@ function commandGlyph(kind: CommandKind): "plus" | "archive" | "tag" | "inbox" |
     case "tags":
     case "tag":
       return "tag";
+    case "pair":
+      return "link";
     case "import":
     case "unfilter":
       return "inbox";
