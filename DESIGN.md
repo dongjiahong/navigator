@@ -613,7 +613,7 @@ line of notes, then tag dots and a due pill.
 always works. A right swipe is 完成 (恢复 on a finished row), a left swipe is 归档,
 and in 归档 it is 删除 — the meanings the board already has, in the fills The Swipe
 Band Exception allows. The horizontal drag is on a narrow strip at each end of the
-row (46pt leading, 56pt trailing) rather than the whole row, because the rows sit
+row (46pt leading everywhere; the 56pt trailing one exists only on 归档, with no mark drawn on it) rather than the whole row, because the rows sit
 inside the pager that is the four columns and a pan that activates takes the touch
 away from every scroll view around it for good: a full-width swipe would cost the
 page turn. **Each strip acts only on the page where the pager has nowhere to go** —

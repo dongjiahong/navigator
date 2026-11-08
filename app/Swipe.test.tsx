@@ -178,9 +178,10 @@ test("a short sideways move on the strip is not an action", async () => {
   const { app } = await openPhone();
   if (!app) return;
 
-  // Twelve points is a thumb slipping while it scrolls, not a decision: the row
-  // springs back, no sheet opens, and the card stays where it was.
-  await app.drag("id:swipe-trail-c3", { x: 12 });
+  // Twelve points is a thumb slipping off the check circle, not a decision: the
+  // row springs back, no sheet opens, and the card stays where it was. The
+  // leading strip is the one armed on 待办, so it is the one worth slipping on.
+  await app.drag("id:swipe-lead-c3", { x: 12 });
   await app.wait(300);
   expect(app.shows("id:phone-col-todo >> text:写周报")).toBe(true);
   expect(app.shows("id:undo-toast")).toBe(false);

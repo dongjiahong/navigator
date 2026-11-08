@@ -224,7 +224,7 @@ function swipeReach(): number {
  *
  * **A handle under 44 points is a handle a thumb has to hunt for.** The leading
  * strip holds the check circle and is 46; the trailing one is 56 rather than the
- * 34 its grip mark alone needs, so that a left swipe starts on a target the
+ * 34 a bare mark would need, so that a left swipe starts on a target the
  * platform would call one. The row is 358 points wide at 390, so the pager still
  * owns 256 of them — the strips grew, the body did not shrink into a handle.
  * `app.drag` is why the number matters to a test as well: it brings the named
@@ -630,7 +630,7 @@ function PhoneRow(props: { card: () => Card }) {
         >
           <CheckCircle card={c} onPress={() => setStatus(c().id, settled() ? "todo" : "done")} />
         </View>
-        <View style={{ flex: 1, gap: 5, paddingRight: 8 }}>
+        <View style={{ flex: 1, gap: 5, paddingRight: c().status === "archive" ? 8 : 16 }}>
           <Text
             style={{
               ...TYPE.phoneTitle,
@@ -656,42 +656,32 @@ function PhoneRow(props: { card: () => Card }) {
             </View>
           ) : null}
         </View>
-        {/* The trailing edge, which held only padding before: a grip is drawn
-            there — the same mark the Mac's cards carry — because a gesture with
-            no mark is a gesture nobody finds. Left swipe, and the room for it.
+        {/* The trailing edge: a left swipe, and only on 归档 — the one page with
+            nothing to its right (see `trail` above). It is an unmarked quick path
+            for 删除; the hold is the way a finger finds it, so no mark is drawn,
+            and on the other three pages the strip takes no room at all, which
+            leaves the whole row to the title.
 
-            The zone is 56 points and the mark keeps the 34 it always had: a
-            handle under the 44 points a thumb needs is one a thumb hunts for,
-            and the reach it grew is quiet — the pager keeps the rest of the row
-            (see `swipeFor`). The padding is that quiet reach: 22 points at the
-            inside of the handle.
-
-            **The zone stops 24 points short of the screen's right edge, and the
-            mark comes with it.** The row already stands 16 points in, which is
-            inside the ~20 points the system keeps for its own back gesture: a
-            touch that started there never reached the app at all — measured on a
-            real Android device, a swipe aimed at the grip left the app instead.
-            Eight points of margin move the whole handle, mark and target alike —
-            padding would have left the drawn mark sitting exactly where a finger
-            cannot press it, which is the same invisible target with a mark on
-            top. The row's own background fills the eight points, so nothing else
-            on the row moves. */}
+            **The zone stops 24 points short of the screen's right edge.** The row
+            already stands 16 points in, which is inside the ~20 points the system
+            keeps for its own back gesture: a touch that started there never
+            reached the app at all — measured on a real Android device, a swipe
+            from the very edge left the app instead. Eight points of margin move
+            the whole target; the row's own background fills them. 56 points wide
+            (22 of them quiet reach at the inside) because a target under the 44
+            points a thumb needs is one a thumb hunts for. */}
         <View
           {...trail()}
           panActivation={{ activeOffsetX: 8, failOffsetY: 20 }}
           testID={`swipe-trail-${c().id}`}
-          accessibilityLabel="左滑归档，或在归档里删除"
+          accessibilityLabel="左滑删除"
           style={{
-            width: 56,
-            marginRight: 8,
-            paddingLeft: 22,
+            width: c().status === "archive" ? 56 : 0,
+            marginRight: c().status === "archive" ? 8 : 0,
+            paddingLeft: c().status === "archive" ? 22 : 0,
             alignSelf: "stretch",
-            alignItems: "center",
-            justifyContent: "center",
           }}
-        >
-          <Icon name="grip" size={15} tint={alpha(theme().textTertiary, 0.75)} width={2} dot={1.2} />
-        </View>
+        />
       </View>
     </View>
   );
