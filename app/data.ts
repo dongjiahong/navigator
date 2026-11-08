@@ -128,6 +128,36 @@ export function remindsAt(card: Card, now: number): boolean {
   return epochOf(card.due) > now;
 }
 
+/**
+ * The cards on the board that want attention now: late, or due today, on work
+ * that is still open.
+ *
+ * This is the number the Dock carries, so it has to mean the same thing the
+ * board says out loud — the red 已逾期 pill and the amber today pill, added up.
+ * A card due today is counted whether or not its hour has passed (it is today's
+ * work either way), a card due tomorrow is not, and finished or filed work asks
+ * for nothing.
+ */
+export function attentionCount(all: Card[], at: number): number {
+  const today = new Date(at);
+  let count = 0;
+  for (const card of all) {
+    if (card.deleted || !card.due) continue;
+    if (card.status === "done" || card.status === "archive") continue;
+    const due = new Date(epochOf(card.due));
+    if (due.getTime() < at) {
+      count += 1;
+      continue;
+    }
+    const sameDay =
+      due.getFullYear() === today.getFullYear() &&
+      due.getMonth() === today.getMonth() &&
+      due.getDate() === today.getDate();
+    if (sameDay) count += 1;
+  }
+  return count;
+}
+
 /** Sample board. Authored content, not a user's real data. */
 export function sampleCards(): Card[] {
   const seed = Date.now();
@@ -490,6 +520,55 @@ export function setStatus(id: string, status: Status): void {
 /** Every card still on the board, without tombstones. */
 export function liveCards(all: Card[]): Card[] {
   return all.filter((c) => !c.deleted);
+}
+
+/**
+ * How long finished work stays in 已完成 before it is filed away.
+ *
+ * 已完成 is a place to look at what was just done, not a second archive: work
+ * left there for a week has stopped being news, and a column that only grows
+ * makes the two cards that matter this afternoon hard to find.
+ */
+export const AUTO_ARCHIVE_DAYS = 7;
+
+const AUTO_ARCHIVE_MS = AUTO_ARCHIVE_DAYS * 86_400_000;
+const HOUR_MS = 3_600_000;
+
+/**
+ * The finished cards older than the archive delay, by id.
+ *
+ * There is no `doneAt`: adding a field would mean a column in the file and a
+ * rule in the merge for a number nobody reads. `updatedAt` is the stand-in —
+ * finishing a card writes it, so the time a card has sat in 已完成 is the time
+ * since its last write, and a card finished a week ago and untouched since reads
+ * exactly right. A card touched this morning starts its week again, which is
+ * the forgiving direction: nothing disappears from 已完成 the day after it was
+ * finished.
+ */
+export function staleDone(all: Card[], at: number): string[] {
+  return all
+    .filter((c) => !c.deleted && c.status === "done" && at - c.updatedAt > AUTO_ARCHIVE_MS)
+    .map((c) => c.id);
+}
+
+/**
+ * Files away the work that has sat in 已完成 for longer than the delay.
+ *
+ * Written as an ordinary patch with a fresh stamp, not through `setStatus`:
+ * this is housekeeping the user did not just press, so there is nothing to
+ * offer back — the card is in 归档, one column to the left of where it was, and
+ * moving it back is a drag. Running it on both devices is harmless: the first
+ * run stamps the card, the other finds nothing stale, and the merge sees an
+ * ordinary edit either way.
+ */
+export function archiveStaleDone(at = Date.now()): void {
+  for (const id of staleDone(cards(), at)) patchCard(id, { status: "archive" });
+}
+
+/** Runs the filing once at launch, then once an hour while the app is open. */
+export function startAutoArchive(): void {
+  archiveStaleDone();
+  setInterval(() => archiveStaleDone(), HOUR_MS);
 }
 
 /** The board as it shows: no tombstones. Views read this, never `cards`. */

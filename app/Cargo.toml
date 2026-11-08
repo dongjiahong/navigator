@@ -33,4 +33,15 @@ objc2-user-notifications = { version = "0.3.2", features = [
     "UNNotificationSound",
     "UNNotificationTrigger",
 ] }
+# The Dock's badge. The board is often behind another window, and the icon is
+# the one part of it a glance still sees, so the count of work that wants
+# attention now goes there too. Default features are off: this crate is one icon
+# corner's worth of AppKit, not the whole framework.
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSApplication",
+    "NSDockTile",
+    # `NSApplication` itself is exported behind both features.
+    "NSResponder",
+] }
 block2 = "0.6.2"

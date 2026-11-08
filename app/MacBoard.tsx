@@ -2,7 +2,7 @@ import { LayoutAnimation, List, Overlay, PanResponder, Text, View, signal } from
 import { cards, COLUMNS, moveCard, setStatus, type Card, type Status } from "./data";
 import { filteredBoard, isFiltering } from "./filters";
 import { lists } from "./focus";
-import { DueBadge, Icon, IconButton, TagRow } from "./ui";
+import { DueBadge, Icon, IconButton, TagRow, clearArchive } from "./ui";
 import { theme, TYPE } from "./theme";
 import { COL_GAP, COL_MAX, HDR_H, PAD_X, PAD_Y, ROW_GAP, ROW_TOP, boardGeom } from "./geom";
 
@@ -429,6 +429,29 @@ function Column(props: {
           {items().length}
         </Text>
         <View style={{ flex: 1 }} />
+        {/* 归档 is the one column that is a pile rather than a plan, so it is the
+            one that carries a way to empty it. It appears only while there is
+            something to empty, as a word at tertiary ink: a destructive press
+            in the corner of a label strip is not a colour's job. */}
+        {props.status === "archive" && items().length > 0 ? (
+          <View
+            testID="clear-archive"
+            onPress={() => void clearArchive()}
+            role="button"
+            accessibilityLabel="清空归档"
+            hoverStyle={{ backgroundColor: theme().chip }}
+            activeStyle={{ opacity: 0.6 }}
+            style={{
+              height: 21,
+              paddingHorizontal: 7,
+              borderRadius: 6,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Text style={{ fontSize: 11.5, fontWeight: "500", color: theme().textTertiary }}>清空</Text>
+          </View>
+        ) : null}
         <IconButton
           name="plus"
           tint={theme().textTertiary}

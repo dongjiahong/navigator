@@ -68,6 +68,23 @@ test("mac deadline calendar", async () => {
 });
 
 /**
+ * The command palette, opened on a query.
+ *
+ * It is a raised object of its own — panel fill, the lifted shadow, a list of
+ * rows — and whether it reads as one surface over the board or as a second
+ * window with a list in it is a question only a picture answers.
+ */
+test("mac command palette", async () => {
+  const app = await openSized(1280, 820, LIGHT);
+  if (!app || !(await canDraw(app))) return;
+  await app.keyboard.press("mod+k");
+  await app.waitFor("id:palette-input");
+  await app.type("id:palette-input", "学习");
+  await app.wait(400);
+  await app.screenshot("mac-palette.png");
+});
+
+/**
  * The keyboard's cursor, between two cards that do not have it.
  *
  * It is a fill and a shadow the open card does not have, and whether that reads

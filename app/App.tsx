@@ -3,8 +3,20 @@ import { isAvailable as hasWindow, Window } from "nsh/desktop";
 import { MacBoard } from "./MacBoard";
 import { Inspector } from "./Inspector";
 import { PhoneHome } from "./PhoneHome";
+import { CommandPalette, closePalette, openPalette, paletteOpen } from "./palette";
 import { adoptWindowChrome, headerHeight, titleSpacer } from "./chrome";
-import { addCard, cards, isBlank, patchCard, removeCard, removeWithUndo, setStatus, type Status } from "./data";
+import {
+  addCard,
+  cards,
+  isBlank,
+  patchCard,
+  removeCard,
+  removeWithUndo,
+  setStatus,
+  startAutoArchive,
+  type Status,
+} from "./data";
+import { startBadge } from "./badge";
 import { isFiltering, searchQuery, tagFilter } from "./filters";
 import { adopt, focusId, focusedCard, keepFocus, moveFocus, shiftFocus } from "./focus";
 import { MIN_WINDOW } from "./geom";
@@ -91,7 +103,13 @@ const WIDE = 900;
  */
 function boardKeys(): boolean {
   return (
-    windowSize().width >= WIDE && selectedId() === null && pickingDue() === null && !managingTags()
+    windowSize().width >= WIDE &&
+    selectedId() === null &&
+    pickingDue() === null &&
+    !managingTags() &&
+    // The palette is a field with the keyboard: its arrows walk its own list,
+    // and the board behind it is not what they would act on.
+    !paletteOpen()
   );
 }
 
@@ -241,11 +259,22 @@ async function boot() {
   }
   startPersist();
   start();
+  // Finished work is filed before the reminders read the board, so a card that
+  // is about to leave 已完成 never gets a notification on its way out.
+  startAutoArchive();
   startReminders();
+  startBadge();
 }
 
 export function App() {
   keymap.bind("mod+n", () => createIn("todo"));
+  // One key reaches every verb the board has: cards by their title, a tag to
+  // narrow to, 新建, the archive, the tags themselves. It toggles, so the key
+  // that opened the field also puts it away.
+  keymap.bind("mod+k", () => {
+    if (paletteOpen()) closePalette();
+    else if (windowSize().width >= WIDE) openPalette();
+  });
   // Escape empties the search field while it has the keyboard, which a field
   // otherwise swallows. Bound first, so the closing binding below is the newer
   // one and wins wherever both may fire — one keypress never does both, and
@@ -354,6 +383,17 @@ export function App() {
           window is showing, so a tag made or renamed here is the same list the
           pickers and the filter row read. */}
       <TagManager />
+      {/* The one field that reaches the board's verbs and its cards by name: it
+          floats over whatever the window shows, and closing it puts the reader
+          back on the board exactly where it was. */}
+      <CommandPalette
+        onNew={() => createIn("todo")}
+        onOpen={(id) => {
+          adopt(id);
+          selectedId.set(id);
+        }}
+      />
+
       {/* One month for both layouts, for the same reason: the deadline editor on
           the Mac's card and on the phone's sheet opens the same calendar. */}
       <DueCalendar />

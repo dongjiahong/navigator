@@ -19,6 +19,7 @@ import {
   Icon,
   IconButton,
   ClearFilterButton,
+  NoteLinks,
   SearchField,
   TagFilterRow,
   TagManagerButton,
@@ -26,6 +27,7 @@ import {
   TagRow,
   alpha,
 } from "./ui";
+import { fieldHeight } from "./text";
 import { theme, onAccentFill, onAccentWash, TYPE } from "./theme";
 import { dismissDue, dueNow } from "./reminders";
 import { connectTo, detail, endpoint, phase, start, statusLine } from "./sync";
@@ -60,16 +62,6 @@ function closeDetail() {
   openId.set(null);
 }
 
-/**
- * A fixed height for a multiline field, from how many lines its text takes.
- * `Input` has no height of its own, and a box tall enough for the longest card
- * would leave a hole under every short one. `perLine` is a rough count of the
- * characters that fit a line at the field's size.
- */
-function fieldHeight(text: string, lineHeight: number, maxLines: number, perLine: number): number {
-  const lines = Math.max(1, Math.min(maxLines, Math.ceil([...text].length / perLine)));
-  return lines * lineHeight + 6;
-}
 const capturing = signal(false);
 const draftTitle = signal("");
 const draftTags = signal<string[]>([]);
@@ -432,6 +424,10 @@ function DetailBody(props: { id: string }) {
               placeholderColor: theme().textTertiary,
             }}
           />
+          {/* The links in the note, under the note: rows of the sheet, not part
+              of the field, so a press opens the browser instead of moving the
+              caret. */}
+          <NoteLinks text={c().notes} size="phone" />
         </View>
       </View>
       <View style={{ paddingHorizontal: 20, paddingTop: 10, gap: 14 }}>

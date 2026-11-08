@@ -1,7 +1,8 @@
 import { Scroll, Text, View, windowSize, type JSX } from "nsh";
 import { Dialog, Input } from "nsh/base";
 import { COLUMNS, cards, patchCard, removeWithUndo, type Card, type Status } from "./data";
-import { DueEditor, IconButton, TagPicker, alpha } from "./ui";
+import { DueEditor, IconButton, NoteLinks, TagPicker, alpha } from "./ui";
+import { charsPerLine, fieldHeight } from "./text";
 import { theme, onAccentWash, TYPE } from "./theme";
 
 const BLANK = (id: string): Card => ({
@@ -71,6 +72,12 @@ export function Inspector(props: {
   // A height, not a ceiling: the scroll inside needs one it can take the rest
   // of, and a popup sized by its content gives it nothing to fill.
   const height = () => Math.max(320, Math.min(600, windowSize().height - 140));
+  // The panel is 440 wide, or the window minus 80 on a small window. A field
+  // inside it measures its own lines against that width minus the 18px padding
+  // on each side — the number `charsPerLine` needs to say how many characters
+  // fit, so a title is never a stub of two words and a note is never cut off.
+  const width = () => Math.min(440, Math.max(300, windowSize().width - 80));
+  const innerWidth = () => width() - 36;
   return (
     <Dialog
       testID="inspector"
@@ -82,7 +89,7 @@ export function Inspector(props: {
       backdropStyle={{ backgroundColor: theme().scrim }}
       style={{
         margin: "auto",
-        width: Math.min(440, Math.max(300, windowSize().width - 80)),
+        width: width(),
         height: height(),
         borderRadius: 16,
         backgroundColor: theme().panel,
@@ -124,7 +131,15 @@ export function Inspector(props: {
             ...TYPE.inspectorTitle,
             color: theme().text,
             placeholderColor: theme().textTertiary,
-            height: 58,
+            // Four lines of title, then the panel's scroll takes the rest: a
+            // title is read at a glance, and one that pushes the tags and the
+            // deadline off the panel has stopped being a title.
+            height: fieldHeight(
+              card().title,
+              TYPE.inspectorTitle.lineHeight,
+              4,
+              charsPerLine(innerWidth(), TYPE.inspectorTitle.fontSize),
+            ),
             padding: 0,
           }}
         />
@@ -174,10 +189,14 @@ export function Inspector(props: {
               ...TYPE.body,
               color: theme().text,
               placeholderColor: theme().textTertiary,
-              height: 96,
+              // Twelve lines is a note, not a document; past that the panel
+              // scrolls under the field rather than the field growing without
+              // end. The links under it are rows, not part of the text.
+              height: fieldHeight(card().notes, TYPE.body.lineHeight, 12, charsPerLine(innerWidth(), TYPE.body.fontSize)),
               padding: 0,
             }}
           />
+          <NoteLinks text={card().notes} />
         </Field>
 
         <Field label="标签">

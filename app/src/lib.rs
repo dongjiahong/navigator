@@ -480,6 +480,7 @@ fn native(registry: &mut Registry) {
     registry.module::<Board>();
     registry.module::<Sync>();
     registry.module::<Reminder>();
+    registry.module::<Dock>();
 }
 
 /// The board's store, in SQLite.
@@ -727,11 +728,91 @@ impl Reminder {
     }
 }
 
+/// The badge on the app's Dock icon.
+///
+/// A board that is behind another window is a board nobody is looking at, and
+/// the icon is the one part of it still in sight. The number on it is the count
+/// of work that wants attention *now* — late, or due today, and still open —
+/// which the interface computes from the same pills the board draws, so the
+/// badge and the cards cannot disagree about what attention means.
+///
+/// It is a Mac idea and only a Mac one: Android has no Dock, and its launcher
+/// dots would need a permission the manifest cannot ask for, so this does
+/// nothing there.
+#[module]
+pub struct Dock;
+
+/// The badge's text for `count`: nothing at zero, so the badge goes away with
+/// the work it was counting, and `99+` past two digits, where a number would no
+/// longer fit on an icon.
+fn badge_label(count: f64) -> Option<String> {
+    let n = if count.is_finite() { count.max(0.0).floor() as u64 } else { 0 };
+    if n == 0 {
+        return None;
+    }
+    if n > 99 {
+        return Some("99+".to_owned());
+    }
+    Some(n.to_string())
+}
+
+#[module]
+impl Dock {
+    /// Puts `count` on the Dock's icon, and takes the badge away at zero.
+    ///
+    /// A no-op where there is no Dock to put it on, which includes a process
+    /// with no bundle: that is `nsh test`'s runner, and a badge is not a reason
+    /// for a test run to die.
+    pub fn set_badge(count: f64) {
+        let label = badge_label(count);
+        #[cfg(target_os = "macos")]
+        macos::set_badge(label);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = label;
+        }
+    }
+
+    /// What the Dock's icon carries now: `""` for no badge, and also for a
+    /// process that has no Dock to ask.
+    ///
+    /// On the main thread this reads the tile itself. Anywhere else it answers
+    /// with what the last hand-over put on the tile — the interface's own thread
+    /// cannot look at AppKit, and the number the icon carries is what that work
+    /// wrote there.
+    pub fn badge() -> String {
+        #[cfg(target_os = "macos")]
+        {
+            return macos::badge();
+        }
+        #[allow(unreachable_code)]
+        String::new()
+    }
+
+    /// Whether this process can badge a Dock icon, and what stops it when it
+    /// cannot: `ok`, or `no-bundle` where there is no app to put a Dock on — a
+    /// bare test executable. `unsupported` where the platform has no Dock.
+    ///
+    /// The badge is a decoration, so a process that cannot draw one works
+    /// without it — but nothing else in the app can tell `""` from "it did not
+    /// happen", and a silent no-op is exactly the kind of thing that ships
+    /// broken.
+    pub fn status() -> String {
+        #[cfg(target_os = "macos")]
+        {
+            return macos::dock_status();
+        }
+        #[allow(unreachable_code)]
+        "unsupported".to_owned()
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
     use super::{AUTH, Ordering};
     use objc2::rc::Retained;
     use objc2::runtime::Bool;
+    use objc2_app_kit::{NSApplication, NSDockTile};
     use objc2_foundation::{NSArray, NSBundle, NSError, NSString};
     use objc2_user_notifications::{
         UNAuthorizationOptions, UNAuthorizationStatus, UNMutableNotificationContent,
@@ -902,6 +983,106 @@ mod macos {
             None => String::new(),
         }
     }
+
+    /// The app's Dock tile, or `None` where this process has none.
+    ///
+    /// Two things can be missing, and both are normal: a bare test executable
+    /// has no bundle to be an app with; and `sharedApplication` builds the app
+    /// object when it does not exist yet, which raises an Objective-C exception
+    /// — an abort, not a return — in a process with no window server. Asking
+    /// first and catching anyway is the same guard the notification centre gets.
+    ///
+    /// It must be called on the main thread: `MainThreadMarker::new()` is the
+    /// check, and AppKit's tile is main-thread only. `apply_label` is the one
+    /// caller, and it runs on the main queue.
+    fn dock_tile() -> Option<Retained<NSDockTile>> {
+        if NSBundle::mainBundle().bundleIdentifier().is_none() {
+            return None;
+        }
+        let mtm = objc2::MainThreadMarker::new()?;
+        match objc2::exception::catch(|| NSApplication::sharedApplication(mtm).dockTile()) {
+            Ok(tile) => Some(tile),
+            Err(_) => None,
+        }
+    }
+
+    /// What the last hand-over put on the tile, so a thread that cannot look at
+    /// AppKit can still answer what the icon carries.
+    fn shown() -> &'static std::sync::Mutex<Option<String>> {
+        static SHOWN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+        &SHOWN
+    }
+
+    /// AppKit is main-thread only and the interface runs its own thread — said
+    /// here because it is the reason this crate hands the work over instead of
+    /// doing it: `nsh`'s engine calls native modules off the main thread.
+    fn on_main_thread() -> bool {
+        objc2::MainThreadMarker::new().is_some()
+    }
+
+    /// Puts `label` on the tile. Runs on the main queue, so AppKit answers.
+    extern "C" fn apply_label(context: *mut std::ffi::c_void) {
+        // The label the caller boxed for this call, taken back and dropped with
+        // the queue's work.
+        let label = unsafe { Box::from_raw(context as *mut Option<String>) };
+        let Some(tile) = dock_tile() else { return };
+        let text = label.as_deref().map(NSString::from_str);
+        tile.setBadgeLabel(text.as_deref());
+        if let Ok(mut shown) = shown().lock() {
+            *shown = label.as_ref().clone();
+        }
+    }
+
+    pub fn set_badge(label: Option<String>) {
+        if NSBundle::mainBundle().bundleIdentifier().is_none() {
+            return;
+        }
+        let boxed = Box::into_raw(Box::new(label));
+        if on_main_thread() {
+            // Already where AppKit lives: no reason to make the run loop carry
+            // it, and no window for the caller to see a stale icon.
+            apply_label(boxed as *mut std::ffi::c_void);
+            return;
+        }
+        // One hop, and the count is on the icon. A hand-over the run loop never
+        // picks up (a process shutting down) leaves its box behind: the badge is
+        // a decoration, and leaking a number is cheaper than a deadlock.
+        unsafe {
+            let queue = std::ptr::addr_of!(_dispatch_main_q) as *mut std::ffi::c_void;
+            dispatch_async_f(queue, boxed as *mut std::ffi::c_void, apply_label)
+        };
+    }
+
+    pub fn badge() -> String {
+        if on_main_thread() {
+            let Some(tile) = dock_tile() else {
+                return String::new();
+            };
+            return tile.badgeLabel().map(|text| text.to_string()).unwrap_or_default();
+        }
+        shown().lock().ok().and_then(|shown| shown.clone()).unwrap_or_default()
+    }
+
+    pub fn dock_status() -> String {
+        if NSBundle::mainBundle().bundleIdentifier().is_none() {
+            return "no-bundle".to_owned();
+        }
+        // Off the main thread the number is handed to the main queue, which is
+        // what makes the AppKit call legal — so a bundle is the whole answer.
+        "ok".to_owned()
+    }
+
+    // The main queue, from libdispatch: linked with the system on macOS, so the
+    // two are declared rather than found in a crate. `dispatch_get_main_queue`
+    // is a macro over the global queue, which is the symbol that exists.
+    unsafe extern "C" {
+        static _dispatch_main_q: std::ffi::c_void;
+        fn dispatch_async_f(
+            queue: *mut std::ffi::c_void,
+            context: *mut std::ffi::c_void,
+            work: extern "C" fn(*mut std::ffi::c_void),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -948,5 +1129,36 @@ mod tests {
         assert_eq!(socket_address("10.0.0.5:8787/"), "10.0.0.5:8787");
         assert_eq!(socket_address(" 10.0.0.5 "), "10.0.0.5:8787");
         assert_eq!(socket_address("http://10.0.0.5"), "10.0.0.5:8787");
+    }
+
+    #[test]
+    fn the_badge_says_nothing_at_zero_and_fits_on_an_icon() {
+        // No badge at zero: the number goes away with the work it counted.
+        assert_eq!(badge_label(0.0), None);
+        assert_eq!(badge_label(0.4), None);
+        // Nor for a count that makes no sense, which is what a board mid-merge
+        // can hand over for one tick.
+        assert_eq!(badge_label(-3.0), None);
+        assert_eq!(badge_label(f64::NAN), None);
+        assert_eq!(badge_label(1.0), Some("1".to_owned()));
+        assert_eq!(badge_label(12.0), Some("12".to_owned()));
+        assert_eq!(badge_label(99.0), Some("99".to_owned()));
+        // Two digits fit an icon's corner; the third does not.
+        assert_eq!(badge_label(100.0), Some("99+".to_owned()));
+    }
+
+    #[test]
+    fn a_process_without_a_dock_simply_does_nothing() {
+        // `cargo test` is a bare executable on a worker thread: no bundle to be
+        // an app with, no AppKit to talk to. Badging must not take the process
+        // down, and where there *is* a Dock the number must really arrive.
+        Dock::set_badge(3.0);
+        if Dock::status() == "ok" {
+            assert_eq!(Dock::badge(), "3");
+            Dock::set_badge(0.0);
+            assert_eq!(Dock::badge(), "");
+        } else {
+            assert_eq!(Dock::badge(), "");
+        }
     }
 }

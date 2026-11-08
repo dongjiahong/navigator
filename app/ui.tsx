@@ -1,9 +1,11 @@
 import {
   Canvas,
+  Clipboard,
   Path2D,
   Text,
   View,
   computed,
+  openUrl,
   signal,
   windowSize,
   type CanvasRenderingContext2D,
@@ -16,6 +18,7 @@ import {
   dueLabel,
   dismissUndo,
   patchTag,
+  removeCard,
   removeTag,
   takeUndo,
   undoable,
@@ -25,7 +28,8 @@ import {
   boardTags,
   type Tag,
 } from "./data";
-import { clearFilters, searchQuery, tagFilter } from "./filters";
+import { clearFilters, filteredBoard, searchQuery, tagFilter } from "./filters";
+import { linksIn } from "./text";
 
 /** `#rrggbb` → `rgba(r, g, b, a)`. */
 export function alpha(hex: string, a: number): string {
@@ -43,7 +47,8 @@ type IconName =
   | "archive"
   | "more"
   | "grip"
-  | "inbox";
+  | "inbox"
+  | "link";
 
 const PATHS: Record<IconName, string[]> = {
   plus: ["M12 5.5v13", "M5.5 12h13"],
@@ -56,6 +61,7 @@ const PATHS: Record<IconName, string[]> = {
   more: ["M6 12h.01", "M12 12h.01", "M18 12h.01"],
   grip: ["M9.5 7h.01", "M14.5 7h.01", "M9.5 12h.01", "M14.5 12h.01", "M9.5 17h.01", "M14.5 17h.01"],
   inbox: ["M3.5 13.5h4l1.5 3h6l1.5-3h4", "M3.5 13.5l2.5-8h12l2.5 8v5h-17z"],
+  link: ["M10 13.5a4.5 4.5 0 006.4.4l2.6-2.6a4.5 4.5 0 00-6.4-6.4l-1.4 1.4", "M14 10.5a4.5 4.5 0 00-6.4-.4l-2.6 2.6a4.5 4.5 0 006.4 6.4l1.4-1.4"],
 };
 
 /**
@@ -177,6 +183,82 @@ export function DueBadge(props: { iso: string; size?: "mac" | "phone"; settled?:
     );
   });
   return <>{tree()}</>;
+}
+
+/**
+ * The links in a note, as rows under it.
+ *
+ * The note itself stays the text the user typed — a link drawn inside a field
+ * could not be pressed, and a link the app marked up would be the app editing
+ * prose. So the field keeps the words and these rows carry the way out: one
+ * line each, truncated, opening in the system's browser. A row is paper pressed
+ * into the sheet on hover, and carries no colour of its own: the board's three
+ * colour jobs do not include "this is a link", and a board of blue links is a
+ * web page.
+ */
+export function NoteLinks(props: { text: string; size?: "mac" | "phone" }) {
+  // The rows are built where they are drawn, from the note's own text, rather
+  // than in a `computed` of their own: a subtree computed for a panel that is
+  // closed is one nothing ever mounted, and this engine frees such a tree twice
+  // when the app goes away.
+  return (
+    <If when={linksIn(props.text).length > 0}>
+      <View style={{ gap: 1, marginTop: -2 }}>
+        <Each of={linksIn(props.text)} key={(url) => url}>
+          {(url) => <NoteLink url={url} size={props.size} />}
+        </Each>
+      </View>
+    </If>
+  );
+}
+
+/** One link of a note: a glyph, the URL on one line, and a press that opens it. */
+function NoteLink(props: { url: () => string; size?: "mac" | "phone" }) {
+  const phone = props.size === "phone";
+  return (
+    <View
+      testID="note-link"
+      onPress={() => openLink(props.url())}
+      role="link"
+      accessibilityLabel={`打开链接 ${props.url()}`}
+      hoverStyle={{ backgroundColor: theme().chip }}
+      activeStyle={{ opacity: 0.6 }}
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
+        minHeight: phone ? 34 : 24,
+        paddingHorizontal: phone ? 2 : 4,
+        borderRadius: 6,
+      }}
+    >
+      <Icon name="link" size={phone ? 12.5 : 11.5} tint={theme().textTertiary} width={1.8} />
+      <Text
+        style={{
+          flexShrink: 1,
+          fontSize: phone ? 13 : 12,
+          fontWeight: "500",
+          color: theme().textSecondary,
+          numberOfLines: 1,
+        }}
+      >
+        {props.url()}
+      </Text>
+    </View>
+  );
+}
+
+/**
+ * Opens a note's link where the platform opens links.
+ *
+ * A browser is outside the app, so the URL goes through `openUrl` rather than
+ * an in-app view: the point of a link on a card is to carry the reader out of
+ * the board. The clipboard is the fallback when nothing handles it — a press
+ * that silently does nothing is worse than a press that leaves the address
+ * where the user can paste it.
+ */
+function openLink(url: string): void {
+  void openUrl(url).catch(() => Clipboard.writeText(url).catch(() => {}));
 }
 
 /** An icon-only button: 28 on the Mac, 44 where a finger is the input. */
@@ -979,6 +1061,28 @@ export async function confirm(title: string, description: string, action: string
     ],
   });
   return result.action === "confirm";
+}
+
+/**
+ * Empties 归档, after asking in the platform's own alert.
+ *
+ * One card can be offered back in a line at the foot of the window; a batch is
+ * not that, and a tombstone written for a whole column is not something the app
+ * can put back for the user. So this is the one press that asks first, and the
+ * question names the number of cards it is about to remove.
+ *
+ * It clears what 归档 shows, which is what its count says: with a tag or a
+ * search narrowing the board, the cards that press would take are the ones on
+ * screen, and the number in the question is that same number.
+ */
+export async function clearArchive(): Promise<void> {
+  const ids = filteredBoard()
+    .filter((c) => c.status === "archive")
+    .map((c) => c.id);
+  if (ids.length === 0) return;
+  const yes = await confirm("清空归档？", `将删除 ${ids.length} 张卡片。`, "清空");
+  if (!yes) return;
+  for (const id of ids) removeCard(id);
 }
 
 /**
