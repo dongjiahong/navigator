@@ -25,13 +25,14 @@ test("a field is one line tall when empty and grows with what is typed", () => {
   expect(fieldHeight("字".repeat(95), line, 12, 30)).toBe(line * 4 + 6);
 });
 
-test("a field stops growing at its ceiling, and the panel's scroll takes over", () => {
+test("a field stops growing at its ceiling", () => {
   const line = 27;
-  // The inspector's title: four lines, then it stops. Past that the panel
-  // scrolls, so the tags and the deadline under it stay reachable.
-  expect(fieldHeight("字".repeat(19 * 4), line, 4, 19)).toBe(line * 4 + 6);
-  expect(fieldHeight("字".repeat(19 * 40), line, 4, 19)).toBe(line * 4 + 6);
-  // The notes: twelve.
+  // The panel's title: three lines, then it stops. The note under it is the
+  // panel's body, sized by the panel rather than by its text, so a long title
+  // can no longer push the controls off the surface.
+  expect(fieldHeight("字".repeat(19 * 3), line, 3, 19)).toBe(line * 3 + 6);
+  expect(fieldHeight("字".repeat(19 * 40), line, 3, 19)).toBe(line * 3 + 6);
+  // The cap is the caller's: a twelve-line field stops at twelve.
   expect(fieldHeight("字".repeat(28 * 12), 20.5, 12, 28)).toBe(20.5 * 12 + 6);
   expect(fieldHeight("字".repeat(28 * 120), 20.5, 12, 28)).toBe(20.5 * 12 + 6);
 });
@@ -87,11 +88,12 @@ test("a long title is kept whole in the panel", async () => {
 
   await app.press("id:card-c2");
   await app.waitFor("id:inspector-title");
-  // A title longer than the panel is tall: it is stored whole, and the panel's
-  // scroll is what shows the rest of it.
+  // A title longer than the three lines it is shown in: it is stored whole, the
+  // field stops at three lines, and the note below it keeps its height.
   const title = "很长的标题".repeat(12);
   await app.type("id:inspector-title", title);
   expect(app.value("id:inspector-title")).toContain(title);
+  expect(app.shows("id:inspector-note-area")).toBe(true);
 });
 
 test("a link typed into a note becomes a row that opens it", async () => {

@@ -27,6 +27,26 @@ test("mac board with a card open", async () => {
   await app.screenshot("mac-inspector.png");
 });
 
+/**
+ * The panel where it is tightest: a 620-point window, a title that fills its
+ * three lines, and a note of twenty.
+ *
+ * The panel is built around the note now, so the case that can go wrong is the
+ * one with the least height to give: if the meta strip clips, if the note's box
+ * collapses, or if the note pushes the header's buttons off the panel, it does
+ * it here.
+ */
+test("mac panel with a long note in a short window", async () => {
+  const app = await openSized(1280, 620, LIGHT);
+  if (!app || !(await canDraw(app))) return;
+  await app.press("card-c2");
+  await app.waitFor("id:inspector-title");
+  await app.type("id:inspector-title", "读完《逐根 K 线解读》的第二章，把形态整理成自己的话");
+  await app.type("id:inspector-notes", "先看单根 K 线的四种形态，再看组合。\n".repeat(24));
+  await app.wait(400);
+  await app.screenshot("mac-inspector-tight.png");
+});
+
 test("phone column", async () => {
   const app = await openSized(390, 844, LIGHT);
   if (!app || !(await canDraw(app))) return;

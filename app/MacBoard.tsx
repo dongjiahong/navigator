@@ -1,7 +1,7 @@
 import { LayoutAnimation, List, Overlay, PanResponder, Text, View, signal } from "nsh";
 import { cards, COLUMNS, moveCard, setStatus, type Card, type Status } from "./data";
 import { filteredBoard, isFiltering } from "./filters";
-import { lists } from "./focus";
+import { clearFocus, lists } from "./focus";
 import { DueBadge, Icon, IconButton, TagRow, clearArchive } from "./ui";
 import { theme, TYPE } from "./theme";
 import { COL_GAP, COL_MAX, HDR_H, PAD_X, PAD_Y, ROW_GAP, ROW_TOP, boardGeom } from "./geom";
@@ -23,7 +23,7 @@ const dragging = signal<{
   lineY: number;
 } | null>(null);
 
-/** Responders are made once per card and per grip: one rebuilt on each render drops the gesture. */
+/** Responders are made once per card: one rebuilt on each render drops the gesture. */
 const pans = new Map<string, ReturnType<typeof PanResponder.create>>();
 
 /**
@@ -172,26 +172,26 @@ function cancelDrag(): void {
 }
 
 /**
- * A pan on the whole card, and one on the grip.
+ * A pan on the whole card.
  *
- * The grip is the visible affordance and always was; it claims the touch at
- * once, because a press on a handle means nothing else. The card claims it only
- * once the pointer has moved: a click that does not move has to stay a click
- * that opens the card, which is what the board is for.
+ * The card is the handle: it claims the touch only once the pointer has moved,
+ * because a click that does not move has to stay a click that opens the card —
+ * that is what the board is for. There is no separate grip any more: the card
+ * body drags, so a handle in its corner was a second way to do the same thing
+ * and a place the title could not use.
  */
-function panFor(fromCard: boolean, cardId: string) {
-  const key = `${fromCard ? "card" : "grip"}:${cardId}`;
-  const cached = pans.get(key);
+function panFor(cardId: string) {
+  const cached = pans.get(cardId);
   if (cached) return cached;
   const pan = PanResponder.create({
-    onStartShouldSetPanResponder: () => !fromCard,
+    onStartShouldSetPanResponder: () => false,
     onMoveShouldSetPanResponder: () => true,
     onPanResponderGrant: (e) => beginDrag(cardId, e.pageX, e.pageY),
     onPanResponderMove: (_e, g) => moveDrag(g.moveX, g.moveY),
     onPanResponderRelease: endDrag,
     onPanResponderTerminate: cancelDrag,
   });
-  pans.set(key, pan);
+  pans.set(cardId, pan);
   return pan;
 }
 
@@ -258,11 +258,11 @@ function CardView(props: {
   return (
     <View
       testID={`card-${card().id}`}
-      {...panFor(true, card().id).panHandlers}
-      // The card is a handle as well as a button: a press that does not move is
-      // a press that opens it, and the same press that moves 5 points lifts it.
-      // The grip keeps its own pan and activates at 4, because it has nothing
-      // else to do and a handle should answer the smallest movement.
+      {...panFor(card().id).panHandlers}
+      // The whole card is the handle: a press that does not move is a press that
+      // opens it, and the same press that moves 5 points lifts it. Nothing in
+      // the card takes the gesture sooner — the circle stays a circle because it
+      // claims its own press before this one is asked.
       panActivation={{ activeOffsetX: 5, activeOffsetY: 5 }}
       onPress={props.onSelect}
       // A hover fill would repaint the card white and erase the selection, so
@@ -302,7 +302,12 @@ function CardView(props: {
             the column instead of stepping in where a check appears. */}
         <View
           testID={`check-${card().id}`}
-          onPress={() => setStatus(card().id, settled() ? "todo" : "done")}
+          // A press on the circle is the pointer's, not the keyboard's: the
+          // cursor the arrows left behind goes, since the user is pointing now.
+          onPress={() => {
+            clearFocus();
+            setStatus(card().id, settled() ? "todo" : "done");
+          }}
           role="checkbox"
           accessibilityLabel={settled() ? "标记为未完成" : "标记为已完成"}
           accessibilityState={{ checked: settled() }}
@@ -350,23 +355,6 @@ function CardView(props: {
         >
           {card().title || "未命名卡片"}
         </Text>
-        <View
-          {...panFor(false, card().id).panHandlers}
-          testID={`grip-${card().id}`}
-          accessibilityLabel="拖动卡片"
-          panActivation={{ activeOffsetX: 4, activeOffsetY: 4 }}
-          activeStyle={{ opacity: 0.45 }}
-          style={{
-            width: 18,
-            height: 20,
-            marginRight: -5,
-            marginTop: -1,
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <Icon name="grip" size={14} tint={theme().textTertiary} width={2} dot={1.25} />
-        </View>
       </View>
       {card().notes ? (
         <Text style={{ ...TYPE.body, fontSize: 12.5, lineHeight: 18.5, color: theme().textSecondary, numberOfLines: 2 }}>
@@ -540,7 +528,7 @@ export function MacBoard(props: {
   width: number;
   selectedId: string | null;
   focusId: string | null;
-  onSelect: (id: string | null) => void;
+  onSelect: (id: string) => void;
   onAdd: (status: Status) => void;
 }) {
   return (

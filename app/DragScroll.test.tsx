@@ -19,7 +19,7 @@ test("a drag held against an edge keeps its target until the drop", async () => 
 
   // c1 starts in 进行中. Drag it into 待办 and rest in that column's bottom
   // band — 48 points up from the board's foot at 588 in a 600-point window.
-  await app.dragAndHold("id:grip-c1", { x: -300, y: 430 });
+  await app.dragAndHold("id:card-c1", { x: -300, y: 430 });
   const held = app.texts().filter((t) => t === "回测里加一个「按考试号规则」的开关");
   expect(held.length).toBeGreaterThan(1);
 

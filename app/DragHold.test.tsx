@@ -14,7 +14,7 @@ test("a lifted card draws the drop seam", async () => {
   if (!app) return;
   if (await canDraw(app)) return;
 
-  await app.dragAndHold("id:grip-c3", { x: 300, y: 40 });
+  await app.dragAndHold("id:card-c3", { x: 300, y: 40 });
 
   // The lifted card and its title travel with the pointer while the card
   // itself is still counted in its column until the drop.
