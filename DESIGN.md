@@ -72,7 +72,7 @@ spacing:
   card-padding: "12px"
   card-gap: "7px"
   row-padding-y: "13px"
-  header-height: "54px"
+  header-height: "titleBar().height + 38px"
   column-header-height: "38px"
 components:
   card:
@@ -124,11 +124,12 @@ because the Mac is used for long stretches and the cool ground tires the eye
 less. Colour is a strict budget of three jobs: a tag dot says what the work
 belongs to, a due time turns amber today and red when it is late, and a finished
 card drops to tertiary ink behind a green check. Nothing else in the interface is
-allowed to be colourful — not the selection, not a header, not a count.
+allowed to be colourful — not the selection, not a header, not a count — with one
+controlled exception, the band a phone row uncovers when it is swiped.
 
 The phone is the same material at a different size. A column becomes a single
-sheet of paper with rows divided by inset hairlines; a card's circle moves to the
-leading edge because a thumb completes work faster than it opens it. Nothing on
+sheet of paper with rows divided by inset hairlines; a card's circle leads the row
+at 44 points, because a thumb completes work faster than it opens it. Nothing on
 the phone is a shrunken desktop control.
 
 **Key Characteristics:**
@@ -139,6 +140,8 @@ the phone is a shrunken desktop control.
 - Hairlines at `0.055`–`0.09` alpha; the heavier rule belongs to the header only.
 - One accent colour, used at roughly 2% of the screen.
 - Dark mode is its own scheme with its own tag colours, not a filter over light.
+- A destructive press is answered *after* the fact, in one line that can put it
+  back; only a batch asks first.
 
 ## Colors
 
@@ -172,6 +175,9 @@ that are the only saturated colour the board permits.
 - **Ink** (`#1A1C1E`): card titles, body.
 - **Ink Secondary** (`#5A6067`): notes, column labels.
 - **Ink Tertiary** (`#666C73`): counts, timestamps, settled titles, empty copy.
+- **Panel** (`#FAFBFC` light, `#1E2123` dark): everything that floats *above* the
+  desk — the open card, the command palette, the pairing dialog, the 更多 sheet,
+  the restore list. One step off paper, not a colour.
 - **Rule** (`#DDE2E5`): the header's bottom edge, and column label rules at
   `hairlineSoft`.
 
@@ -197,6 +203,15 @@ life a card belongs to (a 6px tag dot), it says whether a due time needs attenti
 now (amber today, red late), and it marks work as finished (a green check). Any
 other colour anywhere on the board is a bug.
 
+**The Swipe Band Exception.** The one place colour may be a *fill* is the band a
+phone row uncovers when it is swiped: `ok` behind 完成 / 恢复, `danger` behind
+删除, and the neutral `select` behind 归档, which is a move and not news. They are
+the board's own three jobs at full strength, they exist only while the finger is
+on the row, and their content goes through `onFill()` — white in light (5.29:1 on
+green, 5.93:1 on red), near-black in dark (9.16:1 and 7.75:1) — while the neutral
+band takes `textSecondary` (5.40:1 light, 6.29:1 dark). A filled colour anywhere
+outside a swipe band is still a bug.
+
 **The One Accent Rule.** The accent appears on a button, a selected chip, the drop
 seam, and the phone's FAB — together under 2% of the pixels. Its rarity is what
 makes it read as the thing to press.
@@ -214,11 +229,13 @@ dark accent is a pale blue and white on it is 2.50:1. Both are one function each
 line; a column's rule is `hairlineSoft`, one step quieter. Two lines of equal
 weight bracketing the label strip turn the board into a table.
 
-**The One Window Rule.** The app owns the top of its window. Hide the system
-title bar, keep the platform's window controls, and put them on the same 54pt
-band as the app's own title; inset the title by `titleBar().left` so it clears
-them; make the band draggable. A native application never sits below a band of
-system chrome it did not draw.
+**The One Window Rule.** The app owns the top of its window. Hide the system title
+bar, keep the platform's window controls, let the app's ground run under them with
+no seam, and make that whole band drag the window. But give the platform the strip
+it still reserves: the app's own controls sit in a row below it, never inside it,
+because a press in that strip never reaches the app — a button drawn there is
+visible and dead. A native application never sits below a band of system chrome it
+did not draw.
 
 ## Typography
 
@@ -242,6 +259,9 @@ from size and colour instead.
   tabular count at Ink Tertiary.
 - **Meta** (500, 12/12.5, `0.1px`, tabular figures): due times, tag names, counts.
   Tabular on every number that sits in a column, so digit changes never reflow.
+- **Chip label** (500–600, 11.5): the filter strip's chips, and the palette's
+  hint line under a verb. Below the card's scale on purpose — a control's word is
+  smaller than the content it narrows, or the row reads as a card.
 
 ### Named Rules
 
@@ -253,25 +273,33 @@ needs emphasis, the card is in the wrong column.
 
 ## Layout
 
-A 54px header band carrying 领航, the sync state, and one 新建 button, closed by a
-hairline. **It is the window's title bar**, not an app header inside a titled
-window: the system chrome is hidden (`Window.setTitleBar({ style: "hidden" })`),
-the app fills the window to its top edge, and the traffic lights sit in this
-band. The band is draggable as a title bar, and its left padding adds
-`titleBar().left` so 领航 never runs under the lights. A band of system chrome
-above the board is what makes a native app look like a web page in a browser.
+A header band carrying 领航, the sync state, the 配对码 link and one 新建 button,
+closed by a hairline. **It is the window's title bar**, not an app header inside a
+titled window: the system chrome is hidden (`Window.setTitleBar({ style: "hidden",
+height })`), the app fills the window to its top edge, and the traffic lights sit
+on the app's own ground. The band is draggable as a title bar.
 
-Below it, four equal columns on one continuous sheet: a label row with its count
-and a hairline rule, then cards beginning immediately with no tray.
+It is drawn in two parts, because AppKit keeps a strip at the top for dragging and
+**a press in that strip never reaches the app** — a button drawn there is visible
+and dead. So the ground runs under the lights with no seam, `titleSpacer()` gives
+the platform its strip, and the app's own 38pt row of controls sits immediately
+below it; `headerHeight()` adds the two and is also what `setTitleBar` is given.
+A band of system chrome above the board is what makes a native app look like a web
+page in a browser.
+
+Below it, on the Mac, one row of filters and then four equal columns on one
+continuous sheet: a label row with its count and a hairline rule, then cards
+beginning immediately with no tray.
 
 **An opened card floats at the middle of the window, and the board does not
 move.** It used to dock as a second column, which narrowed all four columns the
 moment a card was read: the board the user was aiming at rearranged itself under
 the pointer that had just opened a card. A panel over the board leaves every
 column exactly where it was, and closing it puts the pointer back on the same
-card. The panel is 440px wide (the window minus 80, narrower on a small window),
-a `panel` fill at 16px radius on `shadowLift`: it is the one thing genuinely
-above the desk.
+card. The panel is `min(560, window − 80)` wide and `min(720, window − 96)` tall,
+floored at 300 × 320 (a `panel` fill at 16px radius on `shadowLift`): it is the
+one thing genuinely above the desk, and it grew because the note is its body —
+440 × 600 was a note with the meta strip in its way.
 
 **Nothing on the board scrolls sideways, and nothing shows a scrollbar.** The
 columns grow with the window to `COL_MAX` and then stop, and the row centers
@@ -279,9 +307,9 @@ itself once there is room to spare. The window is held above the width at which
 four columns reach `COL_MIN` — nsh has no minimum-size API, so an `effect` puts
 the window back to that floor as soon as it goes under. With no horizontal
 scroll view there is no horizontal scrollbar to leave one; the vertical ones are
-switched off (`scrollbar={false}`) on the columns, the phone's pages, the phone's
-filter strip and the floating card, because a bar down the side of a page of
-paper is chrome the app did not draw.
+switched off (`scrollbar={false}`) on the columns, the phone's pages and the
+floating card, because a bar down the side of a page of paper is chrome the app did
+not draw.
 
 Column width is fluid, floored at 246px and capped at 336px, with a 30px gutter
 against a 16px page margin — the gutter must exceed the margin or four columns
@@ -289,12 +317,32 @@ read as a tiled grid instead of columns standing in a page. Reading a card never
 changes those widths: the card floats over the board, so the columns keep the
 measure they had.
 
+**One row narrows the board, and the row never scrolls.** Under the title band:
+今天 / 已逾期 / 无日期 with their whole-board counts, a hairline, the tag strip
+(全部 first and pinned, then the user's tags), 标签 to manage them, 清除 when
+anything is on, then the search field. The search field has a fixed width and is
+the part that must never be pushed off the window, so the tag chips are what
+gives: as many as fit are drawn and the rest go behind 更多, which lights up when
+one of the tags it hides is selected. A count of zero is set one step quieter
+rather than disabled — a chip that vanished would move every chip after it, and a
+dead control is a state the user cannot reach. The date chips take the accent's
+wash when on and are never red or amber: those two colours belong to the due time
+itself, and a filter row that borrowed them would spend the board's alarm on a
+view.
+
 The phone is a single column filling the width, inside a 16px margin, under a
 four-way segmented control with per-column counts. Tapping a segment scrolls the
 pages to it, and the segmented control follows the pages when they are swiped:
 the scroll is the one owner of which column shows, so a tap can never light a
 segment whose list is not under it. Sheets rise from the bottom at a 20px radius
 and reserve `env(keyboard-inset-height)`.
+
+**The phone's head is the title row and nothing else.** 领航, a lens, a funnel, and
+the date with the sync state as one target. The search field and the filters used
+to stand above the list at all times, which is about a hundred points of the only
+screen the phone has spent on two controls most sessions never touch; they are one
+press away now, and a single line over the list — 正在筛选：…, with the press that
+puts the whole board back — says what they left showing.
 
 ## Elevation & Depth
 
@@ -322,7 +370,8 @@ screencaps settle what the token table can only predict: the FAB glyph reads
   a resting card. Tight, short, almost imperceptible — it says "paper on a desk",
   not "floating panel".
 - **`shadowLift`** (`0 4px 10px rgba(22,30,38,0.13), 0 18px 44px rgba(22,30,38,0.17)`):
-  the card being dragged, and the phone's FAB. Only for something genuinely off
+  the card being dragged, the open card's panel, the command palette, the pairing
+  dialog, the undo line, and the phone's FAB. Only for something genuinely off
   the surface.
 
 ### Named Rules
@@ -334,20 +383,32 @@ engine; selection is a fill plus a hairline instead.
 ## Shapes
 
 Cards are 10px radius with no border. Buttons and chips are 7–9px. A due pill is
-5px, deliberately squarer than a tag dot so the two meta types never blur. Sheets
-are 20px at the top corners only. Nothing is a pill except the phone's check
+5px, deliberately squarer than a tag dot so the two meta types never blur. A panel
+that floats — the open card, the command palette, the pairing dialog — is 16px;
+the undo line is 12px, because it is a message and not a surface to press into.
+Sheets are 20px at the top corners only. Nothing is a pill except the phone's check
 circle and the FAB, where roundness is the affordance.
 
 ## Components
 
 ### Card
 
-Paper at rest: white, 10px radius, `shadow`, 12px padding, 7px gap. Title, then
-notes at Ink Secondary clipped to two lines, then one meta row of tag dots and a
-due pill. The drag grip is always present at Ink Tertiary — not on hover: a handle
-that appears only under the pointer is undiscoverable on a trackpad and
-impossible on touch, and the grip is the only way to move a card on the phone's
-shared board. Hover raises the shadow, never the colour. Selected (open in the
+Paper at rest: white, 10px radius, `shadow`, 12px padding, 7px gap. A 22pt circle
+leads the title — a hollow ring in tertiary ink while the card is open work, the
+green check once it is done, grey once it is filed — because the phone finishes a
+row with one tap and the Mac had no way to finish a card without opening it. The
+circle's box is the same size in every state, so titles line up down a column
+instead of stepping in where a check appears. Then the title, notes at Ink
+Secondary clipped to two lines, then one meta row of tag dots and a due pill.
+
+**The card is its own handle.** There is no grip glyph on the Mac: a press that
+moves 5 points lifts the card, and a press that does not is the press that opens
+it. A grip was a target that had to be found inside a 12px padding, it was
+undiscoverable on a trackpad, and the phone's board carries the same cards anyway.
+A card dragged within 48 points of a column's top or bottom scrolls that column,
+faster the closer it gets, and the drop is recomputed on every tick.
+
+Hover raises the shadow, never the colour. Selected (open in the
 inspector) swaps the fill to Pressed Paper and adds a 1px `selectEdge` rule, and
 keeps both on hover — the hover state must be written selection-aware, or it
 repaints the card white *and* repaints its hairline in the accent, and the
@@ -360,11 +421,33 @@ something the user did not press. A selected card also carries **no shadow**: a
 surface takes a border or a shadow, never both, and selection is the one state
 that switches.
 
+**The keyboard's cursor is the second, softer state.** The arrow keys leave the
+same pressed-paper fill on the card Enter would open, and that card **keeps its
+shadow**, where the open card trades its shadow for the hairline: that difference
+is the whole way to tell "the panel is showing this card" from "the keys are
+pointing at it". A pointer press anywhere clears the cursor, because the user is
+pointing now; Enter sets the panel's card without clearing it, so Escape leaves
+the cursor where it was. After a write the cursor keeps its *row*, not the card: the
+next row takes it, so a second Space finishes the card that moved up rather than
+following the finished one into 已完成 and undoing the work.
+
 ### Column
 
 A label row (name at Ink Secondary, count at Ink Tertiary, a plus button) closed by
 a `hairlineSoft` rule — one step quieter than the header's `Rule`, so the label
 strip does not read as a table cell. No background of its own.
+
+The archive's label row carries one more thing: 清空 at Ink Tertiary, drawn only
+while there is something to clear, and it asks first in the platform's own alert
+naming the number of cards. The phone puts the same verb at the foot of the archive
+list instead, where the cards it clears are.
+
+**Finished work files itself after a week.** 已完成 is a place to look at what was
+just done, not a second archive; a card that has sat there for seven days moves to
+归档 on the next launch and once an hour after that, offering no undo because it is
+putting work away rather than throwing it out. The age is the card's `updatedAt`,
+since there is no `doneAt` field: the seven days count from the write that put it
+there, and a column that is renumbered along the way restarts that count.
 
 ### Tag
 
@@ -385,6 +468,10 @@ The dot cycles through the five hues on a press, because five is a count a press
 can walk and a colour picker is a second dialog for a decision this small. The
 dialog states the two things a dot cannot: that it changes the colour, and that
 removing a tag strips it from every card.
+
+Which is why removing a tag, alone among the board's presses, still asks first:
+the cards it changes are cards the user is not looking at, and one line of 撤销 at
+the foot of the window can only offer one card back.
 
 The tag list is data, not code. It syncs like the board, per tag by stamp, with a
 tombstone for a tag removed on one device, and the hue is one of the same five
@@ -423,41 +510,102 @@ a deadline that comes due while the app is open puts one line above the list:
 amber glyph, 到时间了, the card's title, 打开 and a dismiss. It is a banner the app
 draws, and it is honest about being one.
 
+**Ahead of time, and answerable.** A card may carry a second notification, one lead
+time before the deadline, and that lead is a setting of *this Mac* rather than of
+the card: `navigator.leadMinutes` in Storage, off by default, one palette row per
+value (5 / 15 / 30 / 60 minutes), never synced. A reminder carries two buttons —
+完成 and 推迟 1 小时 — registered in the app's own category, and pressing the
+notification itself opens the card. **None of those three interactions has been
+pressed by a human** (this machine grants no notification-click interaction); the
+tests drive the same queue the system feeds the app.
+
+**The schedule is reconciled with the system, not remembered.** Quitting the app and
+opening it straight again makes `UNUserNotificationCenter` drop some of the requests
+it was holding, silently. So launch reads back what the system actually holds
+(`Reminder.pending()`) and re-schedules what is missing and withdraws what is no
+longer the board's — the app's own bookkeeping is not evidence.
+
 ### Inspector
 
-A floating card 440px wide at panel fill, 16px radius, on `shadowLift`, centred
-over the board. Its strip carries 卡片 at tertiary ink and the close button,
-closed by the same rule that closes the board's header. Title at 19.5px/600,
-status chips, notes, tags with their manager, the deadline editor, then a quiet
-rule and the destructive pair.
+A floating card `min(560, window − 80)` wide at panel fill, 16px radius, on
+`shadowLift`, centred over the board. Its strip carries 卡片 at tertiary ink and,
+at the other end, 归档 / 删除 / 关闭 as three icons, closed by the same rule that
+closes the board's header. The destructive pair used to sit under a rule at the
+panel's foot, where two presses cost the note a line of its height.
 
-Deleting a card asks first, in the platform's own alert (`AlertDialog.show`), and
-names the card: a destructive press is never one tap from an accident, and a
-tombstone is not something the app can undo for the user.
+**The note is the body of the panel.** Title at 19.5px/600, up to three lines and
+then it stops; status chips, tags with their manager, the deadline editor, then the
+note, which takes whatever height the panel has left. The field scrolls its own
+text and the panel itself does not scroll: a card is a note with a few decisions
+over it, and a scroll region inside a panel that has nothing to scroll is a
+trapdoor. `Input` has no height of its own, so the note's box is measured and its
+height handed to the field; the first frame falls back to a share of the panel so
+there is no flicker.
+
+The note's links are listed under it — http(s) URLs found in the text, at secondary
+ink with a link glyph, never in the accent, each a press that opens the browser. A
+link the user can see and cannot press is a worse lie than no link.
+
+Deleting a card does not ask. The tombstone keeps every field, so the same press
+offers 撤销 at the foot of the window: the question moved after the act, where it
+is cheaper than a dialog and reversible. A batch is the other way round, and so is
+removing a tag.
+
+**A card nobody filled in is not a card.** Closing the panel — or pressing 新建 a
+second time — drops a card whose title, notes, tags and deadline are all empty. It
+leaves a tombstone like any other delete, says nothing, and offers no undo: the
+board is left exactly as it was found, instead of a 「未命名卡片」 in 待办 that
+nobody decided to make.
 
 ### Phone row
 
 One sheet per column, rows divided by a hairline inset 47px on the left so it
-starts where the text does. A 44pt check circle leads the row, then title, then
-one line of notes, then tag dots and a due pill.
+starts where the text does. A 44pt check circle leads the row, then title, then one
+line of notes, then tag dots and a due pill.
+
+**The Held Row Rule.** A swipe lives at the row's edges, and a hold is the way that
+always works. A right swipe is 完成 (恢复 on a finished row), a left swipe is 归档,
+and in 归档 it is 删除 — the meanings the board already has, in the fills The Swipe
+Band Exception allows. The horizontal drag is on a narrow strip at each end of the
+row (46pt leading, 34pt trailing) rather than the whole row, because the rows sit
+inside the pager that is the four columns and a pan that activates takes the touch
+away from every scroll view around it for good: a full-width swipe would cost the
+page turn. And because the pager wins that race on the pages where it has somewhere
+to go, a **long press** opens a sheet with the same two writes plus 打开 — a gesture
+that only ever existed as a swipe would leave 归档 unreachable there.
 
 ### Phone sheets
 
 Capture: the title field auto-focuses, tags and the deadline editor are taps, and
 添加 is 48dp of accent when it can fire and the tinted wash with a muted accent
 label when the title is empty — `accessibilityState`, not `disabled`, which drops
-the whole affordance and leaves a button that looks live and is not.
+the whole affordance and leaves a button that looks live and is not. A 连续添加
+switch beside it keeps the sheet open after a capture and flashes 已添加 on the
+button for 800ms, which is the difference between adding three cards and fighting
+the same sheet three times; it is off by default, because a sheet that will not
+close is worse than one that will.
 
 Detail: the title and notes are **editable on the phone too**, in native fields on
 the sheet itself — above its controls, outside any scroll view, because an input
 nested in a scroll view has no native field on Android and no tap could ever focus
 it. Every keystroke patches the card, so there is no save button and nothing to
 lose. The sheet keeps every tap as well: status chips, tags, the deadline editor,
-archive, and a delete that asks first.
+archive, and a delete that offers 撤销 rather than asking.
+
+The status chips on that sheet do **not** offer 撤销, and that is deliberate: the
+sheet is a layer over the board, so the line would be drawn underneath it — an
+offer nobody can see or press. The chips themselves are the way back, under the
+finger that would want it; 移到归档 closes the sheet, so that one does offer.
+
+**The One Sheet Rule.** Filters are one sheet too, behind the funnel in the head:
+the tags (several at once), the three date conditions with the whole board's counts,
+标签 to manage them, 清除全部, 完成. It says it is on by lighting the funnel and by
+the one line over the list, not by a strip that is always there.
 
 The header's date and sync state are one target, not two: a status line alone is
-about 12pt tall and a fingertip cannot hit it, so the pressable area grows to
-159pt with negative margins and the text does not move.
+about 12pt tall and a fingertip cannot hit it, so the pressable area grows with
+vertical padding and a negative margin at the right edge, and the text does not
+move. It opens 连到 Mac, where the address and the six digits live.
 
 ### Empty state
 
@@ -465,10 +613,77 @@ A column says what to do, in one quiet line at Ink Tertiary: 把卡片拖到这�
 three live columns, 归档的卡片不会再打扰你 in the archive. No illustration, no
 centred icon in a circle, no "get started" button.
 
+### Undo line
+
+One line at the foot of whatever surface is showing: centred under the Mac's board,
+above the phone's capture button, which it must never cover. Paper on `shadowLift`
+with no border — the same one-raised-object rule as a card — 12px radius, six
+seconds, one line at a time: a second write replaces the first offer, because two
+offers on screen at once is a queue nobody asked for.
+
+Its fill is the surface it floats over, not a new colour: `card` on the Mac (over
+the ivory desk) and `select` on the phone (over a column of paper). 撤销 itself sits
+on a wash of the accent and takes `onAccentWash()` — 5.07:1 on the phone's light
+line, 6.88:1 on the Mac's dark one — never the plain accent, which is under the
+floor on its own tint. The message takes plain ink (11.7–17.1:1 across those four
+fills).
+
+With a dialog open the line is still drawn, but the first press lands on the
+dialog's backdrop instead of the button, so in practice an offer made from the
+inspector is one to take after the panel closes. Six seconds is short enough that
+this has not been worth a second window.
+
+**The Batch-Asks Rule.** One card is offered back in that line; a batch asks
+first. 清空归档 and 清除示例数据 open the platform's own alert and name the number
+of cards they are about to remove — 「将删除 12 张卡片。」 — because a tombstone
+written for a whole column is not something one line can put back. Removing a tag
+is under the same rule: it changes cards the user is not looking at. 清除示例数据
+is offered only while the board still carries authored samples (the palette on the
+Mac, 连到 Mac on the phone), and it tombstones them through the ordinary merge, so
+the other device clears them too instead of pushing them back.
+
+### Command palette
+
+`Cmd+K` opens one field over the board holding every verb the board has: 新建卡片,
+each tag as a filter toggle, the three date conditions and 全部日期, 清除筛选,
+清空归档, 清除示例数据, 标签管理, the lead reminder's five values, 导出（JSON /
+Markdown）, 从剪贴板导入, 从备份恢复, 显示配对码 — and one row per card, so typing a
+title finds the card rather than a command. 480 wide (never under 300, never wider
+than the window less 60), `panel` at 16px on `shadowLift`; the selected row is
+`select`, and the only colour in the list is a tag's dot. The board's keys are off
+while it is open (`boardKeys()`): a shortcut that moved a card behind the field
+would be a card moved by a typo.
+
+The palette is also the only place a setting lives. There is no settings window,
+and a lead time is one number, so it is one row per value in the field that already
+reaches every verb.
+
+### Pairing code
+
+One small text button in the title band — a step to the right of the sync line,
+where a user looks when a phone will not connect — opens a 340pt `panel`: 配对码 at
+16/600, the digits at 36pt/500 in tabular figures as `482 913` (six digits in a row
+read as one number), one line saying to type them into 连到 Mac once, and 重新生成
+at tertiary ink at the foot. Making a new code asks first in the platform's alert:
+every paired phone has to be handed the new digits, and the app cannot take that
+back. The digits never appear in the status line — a code printed beside 等待手机 is
+a number nobody can find when they need it.
+
+### Dock badge
+
+A Mac-only decoration on a glance: the count of cards that are late or due today and
+still open — `attentionCount`, the same judgement the amber and red pills make, so
+the Dock and the board cannot disagree about what needs attention. Nothing at zero,
+so the badge leaves with the work it counted, and `99+` past two digits. It is
+written after the board changes and once a minute, because a deadline turns late
+with nobody typing. A process with no Dock — the phone, a test runner — is a no-op
+and says why in one line at launch.
+
 ## Sync
 
 Sync is part of the surface, not plumbing behind it, because the phone is only
-useful if it holds the same board. Three decisions shape what the user sees.
+useful if it holds the same board. A handful of decisions shape what the user
+sees.
 
 **The Mac is the server, and only while it is open.** Its service is a thread in
 the app's own process. Quitting the app closes the port, so the phone cannot
@@ -490,26 +705,47 @@ does not lose work, and the phone's board is real whether or not it can reach th
 Mac. A change is written as the row that changed, a third of a second after the
 user makes it, and leaving the app flushes what the wait was still holding.
 
-**Merging is per card, and deletes are tombstones.** Both devices hold a board
-and the newer `updatedAt` wins per card, so a phone that was offline cannot
-revert a Mac edit. A deleted card is kept as `{...card, deleted: true}` with a
-new stamp rather than dropped: a dropped id is pushed straight back by the other
-device on the next merge. **A stamp is minted above every stamp already on the
-board**, not just from the wall clock: a clock that was stepped back, or a phone
-whose clock runs ahead, would otherwise let an edit look older than the card it
-edits and lose it silently.
+**Merging is per field, and deletes are tombstones.** Both devices hold a board and
+each field of a card — title, notes, tags, due, status, deleted, rank — carries its
+own stamp, so the title typed on the Mac and the 完成 pressed on the phone in the
+same minute both survive. Where the stamps are equal the larger serialized text of
+the two values wins, in UTF-16 code-unit order on both sides, so two devices can
+never flip a value back and forth. A deleted card is kept as `{...card, deleted:
+true}` with a new stamp rather than dropped: a dropped id is pushed straight back
+by the other device on the next merge, and an undo is the same row with a newer
+`deleted` stamp. **A stamp is minted above every stamp already on the board**, not
+just from the wall clock: a clock that was stepped back, or a phone whose clock
+runs ahead, would otherwise let an edit look older than the card it edits and lose
+it silently.
 
 **What crosses the network is the difference, not the board.** Each side sends
 `{cards, tags, since}` — the rows it changed, and the newest stamp it has heard
-of — and gets back only the rows stamped at or after that. A board of a thousand
-archived cards costs a few hundred bytes per keystroke, and a phone that has been
-alone for a day catches up in one round trip.
+of — and gets back only the rows stamped at or after that. The watermark reaches
+five minutes back (`MARGIN`) because two devices do not share a clock: a Mac two
+minutes behind stamps a new card with a time the phone has already read past, and a
+strict watermark would never ask for it. A board of a thousand archived cards costs
+a few hundred bytes per keystroke, and a phone that has been alone for a day
+catches up in one round trip.
+
+**A code, not an account.** A LAN at a coffee shop is everybody's LAN, so the Mac
+keeps six digits, shows them in its own title band, and the phone proves it read
+them: `GET /challenge` hands out a 16-byte nonce good for thirty seconds and one
+use, and `/state` wants `HMAC-SHA256(code, nonce)` in a header. The code itself
+never crosses the wire; the comparison is constant-time; five failures lock the
+door for a minute, and a lockout is waited out in full rather than shortened by
+coming back to the app. Guessing a million codes five times a minute is about four
+months. What this buys is that a neighbour cannot read or
+write the board; what it does not buy is secrecy, because the cards themselves
+still travel as plain HTTP on the local network. The phone's own line is where a
+wrong code is reported — 需要配对码 / 配对码不对 / 尝试太多次，稍后再试 — in the same
+quiet tertiary ink as everything else sync has to say, one line, never a banner.
 
 The header's status line is the only place any of this shows: `等待手机` on the
 Mac, and `已同步 HH:MM` / `查找中` / `连不上 Mac，正在重新查找` on the phone. It
-is one line of tertiary ink, tap-ready on the phone to open the manual pairing
-sheet, and it never becomes a banner, a toast or a progress bar. Syncing is not
-an activity the user performs; it is a condition they can check.
+is one line of tertiary ink, tap-ready on the phone to open 连到 Mac — the address
+and the six digits in one sheet — and it never becomes a banner, a toast or a
+progress bar. Syncing is not an activity the user performs; it is a condition they
+can check.
 
 ### Named Rules
 
@@ -521,6 +757,25 @@ only as the fallback for a network that cannot broadcast.
 text. A text comparison reports a change on every tick and the resulting
 `cards.set` re-renders the board under the user's finger, which reads as the app
 ignoring taps.
+
+**The Foreground Probe Rule.** A phone is not a server and must not probe like one:
+probing backs off 3 / 6 / 12 / 24 / 30 seconds while no Mac answers, and three
+things bring it straight back to three — the app returning to the foreground, a
+typed address, and finding the Mac. A radio that looks every three seconds for an
+afternoon is a radio that never sleeps.
+
+**The Order-Is-Data Rule.** A column's order is a number on the card (`rank`), not
+an index in an array that the other device cannot see. A move is the midpoint
+between two neighbours, a column that runs out of room between them renumbers
+itself in steps of 1000, and `ord` in the file is only a cache for cards written
+before ranks existed. Anything that reads the visible order without sorting by
+`rank` is one merge away from showing a different board than the other device.
+
+**The Six Digits Rule.** Six digits, generated from the system's randomness with
+rejection sampling so no code is likelier than another, kept out of the board file,
+shown only where the user asked for it, and proven by signing a one-use challenge
+rather than by sending the code. A lockout is the answer to guessing, and it is
+waited out in full.
 
 ## Do's and Don'ts
 
@@ -542,7 +797,17 @@ ignoring taps.
   never dock it as a column that resizes what the user was aiming at.
 - **Do** keep the window above the width four columns need, rather than putting a
   scrollbar under the board.
-- **Do** ask before a delete. A tombstone is not something the app can undo.
+- **Do** make a single destructive press reversible instead of questioning it:
+  one card is answered with a line of 撤销, and only a batch asks first, naming
+  the number it is about to remove.
+- **Do** give one card one undo path that is visible on the surface the press was
+  made on; where a sheet covers the board, the way back is a control on the sheet.
+- **Do** let the card itself be the handle, and let a hold or a key do what a drag
+  can do — a gesture that only exists as a drag is a feature half the input
+  devices cannot reach.
+- **Do** keep the keyboard's cursor and the open card distinguishable: the cursor
+  keeps its shadow, the open card trades it for its hairline.
+- **Do** let the note be the body of the inspector, and let the panel never scroll.
 
 ### Don't:
 
@@ -560,13 +825,22 @@ ignoring taps.
   resulting `cards.set` interrupts a press.
 - **Don't** use bold for a card title on the board.
 - **Don't** paint selection in the accent; select with paper pressed into the desk.
+- **Don't** put a dialog in front of a single delete. The tombstone makes it
+  reversible, and a question asked before every press is a tax on every press.
+- **Don't** fill a surface with colour outside a swipe band: green, red and amber
+  are words about work, not backgrounds for a button.
+- **Don't** let the search field be what gives when the filter row runs out of
+  width — move a tag behind 更多, never the field.
+- **Don't** offer 撤销 from a sheet that covers the line it would be drawn on; give
+  the sheet its own way back.
 - **Don't** leave the system title bar on a native app: a band of chrome the app
   did not draw above its own header reads as a browser window.
 - **Don't** ship an editable field *inside a scroll view* on the phone: on Android
   it has no native view and no tap can focus it. The detail sheet's fields sit on
   the sheet, above its controls, for exactly this reason.
-- **Don't** show a scrollbar on a page of paper. The board and the sheets scroll;
-  the bar is chrome the app did not draw.
+- **Don't** show a scrollbar on a page of paper. The board and the phone's pages
+  scroll, and a note scrolls inside its own field; the bar is chrome the app did
+  not draw.
 - **Don't** hand a value from a `List` row's `item()` to a child component. Rows
   are recycled: pass the accessor and read it where it is drawn, or the third
   cell shows the first card's title.

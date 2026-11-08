@@ -46,17 +46,28 @@ on the phone.
   with sound on the Mac, delivered even after the app quits; a banner inside the
   app on the phone, where Android would drop a notification the manifest cannot
   request. A finished, archived or deleted card drops its reminder, and a date
-  that has already passed is shown as overdue rather than notified.
+  that has already passed is shown as overdue rather than notified. On the Mac a
+  card may also carry a lead reminder ahead of its deadline, and a reminder offers
+  完成 and 推迟 1 小时 without opening the app.
+- A single destructive press is reversible, not interrogated: deleting, finishing
+  and archiving a card leave one line offering 撤销 for a few seconds. Only a batch
+  — 清空归档, 清除示例数据 — asks first, naming how many cards it will remove, and
+  removing a tag asks because it changes cards the user is not looking at.
 - Tags are the user's: created, renamed, recoloured (one of five hues) and removed in one manager on either device. A
   tag outlives a card and syncs like one, with a tombstone so a removal does not come back from the other device.
-- A card can be found by typing its title, its notes, or a tag's name; the board can also be narrowed to one tag.
-- Cross-device sync between the Mac and the Android phone is required; it is not a local-only tool.
+- A card can be found by typing its title, its notes, or a tag's name; the board can also be narrowed to any of
+  several tags at once (either of them), to one date condition (今天 / 已逾期 / 无日期), or to both, and those stack
+  with the search. The filter is a view of this device, not part of the board: it does not sync.
+- Cross-device sync between the Mac and the Android phone is required; it is not a local-only tool. Reading or writing
+  the board over the LAN needs a six-digit pairing code from the Mac, so a shared Wi-Fi is not a shared board.
 - No accounts, teams, assignees, comments, or permissions in scope.
 - Both devices edit: the Mac is the fuller surface, the phone edits a card's title, notes, tags, status and deadline,
   and captures new cards in a few taps.
 - The board is kept on each device in a SQLite file in the app's own data directory: quitting the app does not lose
-  work, and the phone's board is real whether or not it can reach the Mac. Sync carries the cards that changed, not the
+  work, and the phone's board is real whether or not it can reach the Mac. Sync carries the fields that changed, not the
   whole board, so a thousand archived cards cost nothing to keep.
+- The board is never trapped in the app: the Mac exports it as JSON or Markdown, imports one back from the clipboard,
+  keeps a daily snapshot for a week, and can restore from those snapshots. The phone does not export.
 
 ## Evidence on Hand
 
@@ -74,5 +85,6 @@ it could be mistaken for a user's real data. No customers, benchmarks, or pricin
 ## Accessibility & Inclusion
 
 Standard platform accessibility: VoiceOver / TalkBack labels on every card and control, full keyboard operation on the
-Mac (Tab order, Cmd shortcuts, no mouse-only action), system text scaling respected, reduced motion honored for
-transitions and drag.
+Mac (arrow keys walk the board, Enter opens the card under them, Space finishes it, Cmd+N / Cmd+K / Cmd+F / Cmd+] /
+Cmd+[ cover creating, finding and moving, and no action is mouse-only), system text scaling respected, reduced motion
+honored for transitions and drag.
