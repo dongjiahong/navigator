@@ -111,6 +111,24 @@ test("mac command palette", async () => {
  * as "the keys are here" without becoming the loudest card on the board is a
  * question only a picture answers — the headless engine paints nothing.
  */
+/**
+ * The filter row with both questions answered.
+ *
+ * The row now holds the date conditions, a hairline, the tags, 更多, the tag
+ * manager, 清除 and the search — and a chosen chip is the accent's wash. Whether
+ * that reads as one strip rather than a row of buttons is a question only a
+ * picture answers.
+ */
+test("mac filter row with a date condition and two tags", async () => {
+  const app = await openSized(1280, 820, LIGHT);
+  if (!app || !(await canDraw(app))) return;
+  await app.press("label:工作");
+  await app.press("label:学习");
+  await app.press("label:今天");
+  await app.wait(300);
+  await app.screenshot("mac-filters.png");
+});
+
 test("mac keyboard focus", async () => {
   const app = await openSized(1280, 820, LIGHT);
   if (!app || !(await canDraw(app))) return;

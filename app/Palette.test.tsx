@@ -35,7 +35,11 @@ test("with nothing typed the palette offers the verbs, not every card", () => {
   expect(rows[0].label).toBe("新建卡片");
   // The tags, the tag manager and the filter are all one press away.
   expect(rows.map((row) => row.label)).toContain("标签管理");
-  expect(rows.map((row) => row.label)).toContain("按标签筛选：工作");
+  expect(rows.map((row) => row.label)).toContain("切换标签筛选：工作");
+  // The date group is one row per condition, and 全部日期 is the way back.
+  for (const label of ["筛选：今天", "筛选：已逾期", "筛选：无日期", "筛选：全部日期"]) {
+    expect(rows.map((row) => row.label)).toContain(label);
+  }
   expect(rows.map((row) => row.label)).toContain("清除筛选");
   // 归档 has cards, so it can be emptied from here too.
   expect(rows.map((row) => row.label)).toContain("清空归档");
@@ -71,7 +75,18 @@ test("a card is found by its tag's name, and by letters in order", () => {
 test("a tag command carries the tag and its hue; 清空归档 only when there is a pile", () => {
   const rows = rankCommands("生活", [], TAGS);
   const tag = rows.find((row) => row.kind === "tag" && row.tagId === "life");
-  expect(tag).toMatchObject({ label: "按标签筛选：生活", hue: "amber" });
+  expect(tag).toMatchObject({ label: "切换标签筛选：生活", hue: "amber" });
+  // Nothing is filtered, so no tag row claims to be the one in force.
+  expect(tag?.hint).toBeUndefined();
+
+  // The rows follow the selection, and the date group does the same: the row in
+  // force says 当前 and the others say nothing.
+  const chosen = rankCommands("", [], TAGS, 0, { tags: ["life"], due: "today" });
+  expect(chosen.find((row) => row.tagId === "life")?.hint).toBe("当前");
+  expect(chosen.find((row) => row.tagId === "work")?.hint).toBeUndefined();
+  const dueRows = chosen.filter((row) => row.kind === "due");
+  expect(dueRows.find((row) => row.label === "筛选：今天")?.hint).toBe("当前");
+  expect(dueRows.find((row) => row.label === "筛选：全部日期")?.hint).toBeUndefined();
 
   const empty = rankCommands("", [], TAGS);
   expect(empty.some((row) => row.kind === "clear-archive")).toBe(false);
@@ -207,7 +222,7 @@ test("the palette's verbs do what they say", async () => {
   // A tag narrows the board to it, from the keyboard.
   await app.keyboard.press("mod+k");
   await app.waitFor("id:palette-input");
-  await app.type("id:palette-input", "按标签筛选：学习");
+  await app.type("id:palette-input", "切换标签筛选：学习");
   await app.wait(300);
   await app.keyboard.press("enter");
   await app.wait(400);
@@ -222,6 +237,39 @@ test("the palette's verbs do what they say", async () => {
   await app.keyboard.press("enter");
   await app.wait(400);
   expect(app.shows("id:col-todo >> id:card-c3")).toBe(true);
+});
+
+/**
+ * The date group from the keyboard: the three conditions and the way back.
+ *
+ * The board's own sample cards settle which card each one keeps — c3 is due
+ * today, c5 has no deadline at all — so the rows can be checked without a clock
+ * in the test.
+ */
+test("the palette narrows the board to a date condition and back", async () => {
+  const { app, desktop } = await openApp();
+  if (!desktop) return;
+
+  await app.keyboard.press("mod+k");
+  await app.waitFor("id:palette-input");
+  await app.type("id:palette-input", "筛选：无日期");
+  await app.wait(300);
+  await app.keyboard.press("enter");
+  await app.wait(400);
+  // c5 carries no deadline; c3's is today.
+  expect(app.shows("id:col-todo >> id:card-c5")).toBe(true);
+  expect(app.shows("id:col-todo >> id:card-c3")).toBe(false);
+  // The chip on the board says which condition is in force.
+  expect(app.spanStyle("id:date-none >> text:无日期").fontWeight).toBe(600);
+
+  await app.keyboard.press("mod+k");
+  await app.waitFor("id:palette-input");
+  await app.type("id:palette-input", "筛选：全部日期");
+  await app.wait(300);
+  await app.keyboard.press("enter");
+  await app.wait(400);
+  expect(app.shows("id:col-todo >> id:card-c3")).toBe(true);
+  expect(app.spanStyle("id:date-none >> text:无日期").fontWeight).not.toBe(600);
 });
 
 test("新建卡片 from the palette makes a card like the button does", async () => {

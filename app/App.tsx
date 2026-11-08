@@ -20,7 +20,8 @@ import {
   type Status,
 } from "./data";
 import { startBadge } from "./badge";
-import { isFiltering, searchQuery, tagFilter } from "./filters";
+import { searchQuery } from "./filters";
+import { MacFilterBar } from "./FilterBar";
 import { adopt, clearFocus, focusId, focusedCard, keepFocus, moveFocus, shiftFocus } from "./focus";
 import { MIN_WINDOW } from "./geom";
 import { hydrate, startPersist } from "./persist";
@@ -28,13 +29,9 @@ import { nudgeSync, openPairCode, phase, start, statusLine } from "./sync";
 import { installReminders, openRequested, startReminders } from "./reminders";
 import { theme, onAccentWash } from "./theme";
 import {
-  ClearFilterButton,
   DueCalendar,
   Icon,
-  SearchField,
-  TagFilterRow,
   TagManager,
-  TagManagerButton,
   UndoToast,
   alpha,
   blurSearch,
@@ -199,28 +196,12 @@ function MacShell() {
           </View>
         </View>
 
-        {/* Search and one tag, on the board's own sheet. It is a strip rather
-            than another boxed row: the tag dots are the only colour, and nothing
-            gets a tray. */}
-        <View
-          testID="filter-bar"
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 8,
-            paddingLeft: 20,
-            paddingRight: 20,
-            paddingBottom: 10,
-          }}
-        >
-          <TagFilterRow />
-          <TagManagerButton />
-          <If when={isFiltering()}>
-            <ClearFilterButton />
-          </If>
-          <View style={{ flex: 1 }} />
-          <SearchField width={190} />
-        </View>
+        {/* When it is due, whose work it is, and which words — one row on the
+            board's own sheet. Not another boxed row: the tag dots are the only
+            colour, and nothing here gets a tray. It is sized from the window
+            because the tag strip is the part that gives when the window is
+            narrow; the search field is the part that never does. */}
+        <MacFilterBar width={windowSize().width} />
 
         <MacBoard
           width={windowSize().width}
