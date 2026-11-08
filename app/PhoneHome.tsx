@@ -1,6 +1,17 @@
 import { List, Scroll, Text, View, signal, windowSize, type ScrollRef } from "nsh";
 import { Input, Sheet } from "nsh/base";
-import { COLUMNS, addCard, cards, patchCard, type Card, type Status } from "./data";
+import {
+  COLUMNS,
+  addCard,
+  cards,
+  isBlank,
+  patchCard,
+  removeCard,
+  removeWithUndo,
+  setStatus,
+  type Card,
+  type Status,
+} from "./data";
 import { filteredBoard, isFiltering } from "./filters";
 import {
   DueBadge,
@@ -14,7 +25,6 @@ import {
   TagPicker,
   TagRow,
   alpha,
-  confirmRemoveCard,
 } from "./ui";
 import { theme, onAccentFill, onAccentWash, TYPE } from "./theme";
 import { dismissDue, dueNow } from "./reminders";
@@ -36,6 +46,18 @@ let pages: ScrollRef | undefined;
 function openCard(id: string) {
   shownId.set(id);
   openId.set(id);
+}
+
+/**
+ * Closes the detail sheet, and takes a card that ended up with nothing in it
+ * with it: the same rule as the Mac's panel, so a phone that clears a title does
+ * not leave an empty row behind. A card with any content stays.
+ */
+function closeDetail() {
+  const id = shownId();
+  const card = id ? cards().find((c) => c.id === id) : undefined;
+  if (card && isBlank(card)) removeCard(card.id);
+  openId.set(null);
 }
 
 /**
@@ -128,7 +150,7 @@ function PhoneRow(props: { card: () => Card }) {
     >
       <CheckCircle
         card={c}
-        onPress={() => patchCard(c().id, { status: settled() ? "todo" : "done" })}
+        onPress={() => setStatus(c().id, settled() ? "todo" : "done")}
       />
       <View style={{ flex: 1, gap: 5 }}>
         <Text
@@ -311,9 +333,6 @@ function DetailSheet() {
   return (
     <Sheet
       open={!!openId()}
-      onOpenChange={({ open }) => {
-        if (!open) openId.set(null);
-      }}
       closeOnSwipe
       popupStyle={{
         backgroundColor: theme().panel,
@@ -323,6 +342,9 @@ function DetailSheet() {
         paddingBottom: "env(keyboard-inset-height)",
       }}
       backdropStyle={{ backgroundColor: theme().scrim }}
+      onOpenChange={({ open }) => {
+        if (!open) closeDetail();
+      }}
     >
       {c() ? <DetailBody id={c()!.id} /> : <View style={{ height: 1 }} />}
     </Sheet>
@@ -358,7 +380,7 @@ function DetailBody(props: { id: string }) {
           paddingTop: 4,
         }}
       >
-        <IconButton name="close" tint={theme().textSecondary} size={44} label="关闭" onPress={() => openId.set(null)} />
+        <IconButton name="close" tint={theme().textSecondary} size={44} label="关闭" onPress={closeDetail} />
         <View style={{ flex: 1 }} />
         <Text style={{ ...TYPE.metaPhone, color: theme().textTertiary }}>
           {COLUMNS.find((x) => x.id === c().status)!.label}
@@ -418,6 +440,11 @@ function DetailBody(props: { id: string }) {
             const on = c().status === s.id;
             return (
               <View
+                // Not `setStatus`: a sheet is a layer over the board, so an
+                // offer made here would be drawn under it — an undo nobody can
+                // see or press. These chips are the way back instead, and they
+                // are under the finger that would want it. 移到归档 below closes
+                // the sheet, so that one does offer.
                 onPress={() => patchCard(c().id, { status: s.id })}
                 role="button"
                 accessibilityLabel={`移到${s.label}`}
@@ -445,17 +472,23 @@ function DetailBody(props: { id: string }) {
         <View style={{ flexDirection: "row", gap: 18, paddingTop: 6 }}>
           <View
             onPress={() => {
-              patchCard(c().id, { status: "archive" });
-              openId.set(null);
+              setStatus(c().id, "archive");
+              closeDetail();
             }}
             role="button"
             accessibilityLabel="移到归档"
           >
             <Text style={{ fontSize: 14, fontWeight: "500", color: theme().textSecondary }}>移到归档</Text>
           </View>
+          {/* The delete offers 撤销 above the capture button rather than asking
+              in a dialog: the tombstone keeps the card whole, so one press can
+              put it back. */}
           <View
             testID="detail-delete"
-            onPress={() => void confirmRemoveCard(c, () => openId.set(null))}
+            onPress={() => {
+              removeWithUndo(c().id);
+              closeDetail();
+            }}
             role="button"
             accessibilityLabel="删除"
           >

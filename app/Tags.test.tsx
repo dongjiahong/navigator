@@ -90,33 +90,25 @@ test("the time of day is editable on the card", async () => {
   expect(app.texts()).toContain("00");
 });
 
-test("deleting a card asks first, and 取消 keeps it", async () => {
+test("deleting a card asks nothing and offers it back instead", async () => {
   const { app, desktop } = await openApp();
   if (!desktop) return;
 
-  let asked = "";
-  app.onDialog((dialog) => {
-    asked = dialog.message ?? dialog.title ?? "";
-    return "取消";
+  let asked = 0;
+  app.onDialog(() => {
+    asked++;
+    return null;
   });
   await app.press("id:card-c3");
   await app.waitFor("id:inspector-title");
   await app.press("label:删除卡片");
-  await app.wait(400);
-
-  expect(asked).toContain("写周报");
-  expect(app.shows("id:col-todo >> id:card-c3")).toBe(true);
-});
-
-test("a confirmed delete removes the card", async () => {
-  const { app, desktop } = await openApp();
-  if (!desktop) return;
-
-  app.onDialog(() => "删除");
-  await app.press("id:card-c3");
-  await app.waitFor("id:inspector-title");
-  await app.press("label:删除卡片");
   await app.wait(500);
+
+  // A card is kept as a tombstone with every field, so a delete can be written
+  // again: the press is not a question, and the way back is offered at the foot
+  // of the window for a few seconds.
+  expect(asked).toBe(0);
   expect(app.shows("id:col-todo >> id:card-c3")).toBe(false);
   expect(app.shows("id:inspector-title")).toBe(false);
+  expect(app.texts()).toContain("已删除「写周报」");
 });

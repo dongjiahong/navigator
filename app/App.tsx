@@ -4,22 +4,53 @@ import { MacBoard } from "./MacBoard";
 import { Inspector } from "./Inspector";
 import { PhoneHome } from "./PhoneHome";
 import { adoptWindowChrome, headerHeight, titleSpacer } from "./chrome";
-import { addCard, cards, patchCard, type Status } from "./data";
+import { addCard, cards, isBlank, patchCard, removeCard, setStatus, type Status } from "./data";
 import { isFiltering } from "./filters";
 import { MIN_WINDOW } from "./geom";
 import { hydrate, startPersist } from "./persist";
 import { phase, start, statusLine } from "./sync";
 import { startReminders } from "./reminders";
 import { theme, onAccentWash } from "./theme";
-import { ClearFilterButton, DueCalendar, Icon, SearchField, TagFilterRow, TagManager, TagManagerButton, alpha } from "./ui";
+import {
+  ClearFilterButton,
+  DueCalendar,
+  Icon,
+  SearchField,
+  TagFilterRow,
+  TagManager,
+  TagManagerButton,
+  UndoToast,
+  alpha,
+} from "./ui";
 
 const selectedId = signal<string | null>(null);
 
 
 function createIn(status: Status) {
+  // 新建 twice in a row: the blank card the first press made is not a card, and
+  // the panel has already moved on to the second, so nothing would ever close
+  // the first one again. It goes now, and the new card takes its place.
+  const shown = selectedId();
+  const open = shown ? cards().find((c) => c.id === shown) : undefined;
+  if (open && isBlank(open)) removeCard(open.id);
   const id = addCard({ title: "", notes: "", tags: [], due: undefined });
   patchCard(id, { status });
   selectedId.set(id);
+}
+
+/**
+ * Closes the open card, and takes a card that was never filled in with it.
+ *
+ * 新建 makes a card first and opens it, because a card is what the panel edits;
+ * closing the panel on a card with no title, note, tag or deadline should leave
+ * the board as it was found rather than put a 「未命名卡片」 in 待办 that nobody
+ * decided to make. Nothing is said about it: the card never became one.
+ */
+function closeCard() {
+  const id = selectedId();
+  const card = id ? cards().find((c) => c.id === id) : undefined;
+  if (card && isBlank(card)) removeCard(card.id);
+  selectedId.set(null);
 }
 
 /** The one place sync reports itself, on either device. */
@@ -147,8 +178,8 @@ function MacShell() {
           opened, which moved the columns under the pointer mid-press. */}
       <Inspector
         id={selectedId()}
-        onClose={() => selectedId.set(null)}
-        onSelectStatus={(s) => patchCard(selectedId()!, { status: s })}
+        onClose={closeCard}
+        onSelectStatus={(s) => setStatus(selectedId()!, s)}
       />
     </View>
   );
@@ -178,7 +209,7 @@ async function boot() {
 
 export function App() {
   keymap.bind("mod+n", () => createIn("todo"));
-  keymap.bind("escape", () => selectedId.set(null));
+  keymap.bind("escape", closeCard);
   // The window's title bar is the app's own header, and it can be drawn at once:
   // nothing about it waits for the board.
   adoptWindowChrome();
@@ -232,6 +263,10 @@ export function App() {
       {/* One month for both layouts, for the same reason: the deadline editor on
           the Mac's card and on the phone's sheet opens the same calendar. */}
       <DueCalendar />
+      {/* One undo line for both layouts, at the foot of the surface: a delete, a
+          completion and an archive are all one press from being taken back, and
+          the app says so in the same place whichever device did it. */}
+      <UndoToast phone={windowSize().width < WIDE} />
     </View>
   );
 }

@@ -89,6 +89,20 @@ export function now(): number {
 }
 
 /**
+ * A new row id: the millis it was made, then a short random tail.
+ *
+ * `c${Date.now()}` is enough on one device and collides the moment there are
+ * two: a phone that captures a card in the same millisecond the Mac makes one
+ * hands the merge two rows carrying one id, and the merge keeps one of them.
+ * The tail turns that into a coincidence instead of a schedule. Ids are opaque
+ * strings everywhere else, so the rows made before this keep working.
+ */
+export function newId(prefix: string): string {
+  const tail = Math.random().toString(36).slice(2, 8);
+  return `${prefix}${Date.now().toString(36)}${tail.padEnd(6, "0")}`;
+}
+
+/**
  * `2026-11-12T14:30` → millis since the epoch, in the device's own zone.
  *
  * Not `new Date(iso)`: a due is written without a zone, and some engines read a
@@ -301,7 +315,7 @@ export function addTag(label: string): void {
   if (!text) return;
   const stamp = now();
   const hue = nextHue();
-  tags.update((all) => [...all, { id: `t${Date.now()}`, label: text, hue, updatedAt: stamp }]);
+  tags.update((all) => [...all, { id: newId("t"), label: text, hue, updatedAt: stamp }]);
 }
 
 export function patchTag(id: string, patch: Partial<Pick<Tag, "label" | "hue">>) {
@@ -329,7 +343,7 @@ export function byStatus(status: Status): Card[] {
 }
 
 export function addCard(partial: Pick<Card, "title" | "notes" | "tags" | "due">) {
-  const id = `c${Date.now()}`;
+  const id = newId("c");
   const stamp = now();
   cards.update((all) => [
     ...all,
@@ -373,6 +387,106 @@ export function removeCard(id: string) {
   );
 }
 
+/**
+ * Puts a removed card back. The tombstone kept every field, so a restore is
+ * the same row with a fresh stamp — which is also what beats the tombstone on
+ * the other device: undo is an ordinary edit, not a case in the merge.
+ */
+export function restoreCard(id: string) {
+  const stamp = now();
+  cards.update((all) =>
+    all.map((c) => (c.id === id ? { ...c, deleted: false, updatedAt: stamp } : c)),
+  );
+}
+
+/**
+ * A card with nothing in it yet.
+ *
+ * 新建 opens a blank card to type into; closing that panel without typing
+ * should leave the board exactly as it was, rather than a 「未命名卡片」 in 待办
+ * that nobody decided to make. A title, a note, a tag or a deadline is what
+ * makes it a card, and then it stays.
+ */
+export function isBlank(card: Card): boolean {
+  return !card.deleted && !card.title.trim() && !card.notes.trim() && card.tags.length === 0 && !card.due;
+}
+
+/** A way back from what just happened: at most one at a time. */
+export const undoable = signal<{ label: string; undo: () => void } | null>(null);
+
+/** How long the way back is offered. */
+const UNDO_MS = 6000;
+
+let undoTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Offers to take the last action back, for a few seconds.
+ *
+ * One at a time: a second offer replaces the first rather than stacking. The
+ * toast is one line at the foot of the window, and two lines of 「已删除」 with
+ * two 撤销 buttons is a decision nobody wants to make at speed.
+ */
+export function offerUndo(label: string, undo: () => void): void {
+  if (undoTimer) clearTimeout(undoTimer);
+  undoable.set({ label, undo });
+  undoTimer = setTimeout(dismissUndo, UNDO_MS);
+}
+
+/** Closes the offer: its time ran out, or the user said no. */
+export function dismissUndo(): void {
+  if (undoTimer) clearTimeout(undoTimer);
+  undoTimer = null;
+  undoable.set(null);
+}
+
+/** Takes the offer. It closes first, so the undo cannot offer itself again. */
+export function takeUndo(): void {
+  const offer = undoable();
+  dismissUndo();
+  offer?.undo();
+}
+
+/** A card's title, or the name a card with no title shows as. */
+function nameOf(card: Card): string {
+  return card.title.trim() || "未命名卡片";
+}
+
+/**
+ * Removes a card and offers a way back.
+ *
+ * Deleting no longer asks first: the tombstone carries every field, so a delete
+ * is a row that can be written again, and one line saying so is cheaper than a
+ * native alert standing between the press and its outcome. 标签 is the other
+ * way round — removing a tag strips it from cards the user is not looking at —
+ * and it still asks.
+ */
+export function removeWithUndo(id: string): void {
+  const card = cards().find((c) => c.id === id && !c.deleted);
+  if (!card) return;
+  removeCard(id);
+  offerUndo(`已删除「${nameOf(card)}」`, () => restoreCard(id));
+}
+
+/**
+ * Moves a card from a control — a status chip, a check circle — and offers to
+ * take the move back when it hides the work.
+ *
+ * 已完成 and 归档 are the two columns a card is hard to find in again; a move
+ * back to 待办 or 进行中 needs no offer, because the chip that made it is still
+ * under the pointer. Dragging is not offered either: the board itself is the
+ * way back.
+ */
+export function setStatus(id: string, status: Status): void {
+  const card = cards().find((c) => c.id === id && !c.deleted);
+  if (!card || card.status === status) return;
+  const before = card.status;
+  patchCard(id, { status });
+  if (status !== "done" && status !== "archive") return;
+  offerUndo(`${status === "archive" ? "已归档" : "已完成"}「${nameOf(card)}」`, () =>
+    patchCard(id, { status: before }),
+  );
+}
+
 /** Every card still on the board, without tombstones. */
 export function liveCards(all: Card[]): Card[] {
   return all.filter((c) => !c.deleted);
@@ -383,16 +497,32 @@ export function board(): Card[] {
   return liveCards(cards());
 }
 
-/** "今天 15:15" / "明天 09:00" / "11月12日 14:00" / "已逾期 · 昨天 18:00". */
+/**
+ * "今天 15:15" / "明天 09:00" / "11月12日 14:00" / "2027年1月5日 14:00" /
+ * "已逾期 · 昨天 18:00".
+ *
+ * The day is read through `epochOf`, never `new Date(iso)`: a due is written
+ * without a zone, and an engine that reads a bare stamp as UTC would show the
+ * wrong hour on every card outside Greenwich.
+ */
 export function dueLabel(iso: string): { text: string; tone: "normal" | "soon" | "late" } {
-  const due = new Date(iso);
+  const due = new Date(epochOf(iso));
   const current = new Date();
   const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   const days = Math.round((startOfDay(due) - startOfDay(current)) / 86_400_000);
   const hm = `${String(due.getHours()).padStart(2, "0")}:${String(due.getMinutes()).padStart(2, "0")}`;
   const overdue = due.getTime() < current.getTime();
+  // A deadline in another year names that year: 「1月5日」 on a board read in
+  // December would be this year's January, which has already gone.
+  const sameYear = due.getFullYear() === current.getFullYear();
   const day =
-    days === 0 ? "今天" : days === 1 ? "明天" : days === -1 ? "昨天" : `${due.getMonth() + 1}月${due.getDate()}日`;
+    days === 0
+      ? "今天"
+      : days === 1
+        ? "明天"
+        : days === -1
+          ? "昨天"
+          : `${sameYear ? "" : `${due.getFullYear()}年`}${due.getMonth() + 1}月${due.getDate()}日`;
   // The time always shows: a deadline the user set to 14:00 and an app that
   // answers "11月12日" has thrown away the only part they cared about.
   const text = `${day} ${hm}`;

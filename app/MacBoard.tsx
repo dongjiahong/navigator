@@ -242,6 +242,7 @@ function Column(props: {
   return (
     <View style={{ width: props.width }}>
       <View
+        testID={`head-${props.status}`}
         style={{
           height: HDR_H,
           flexDirection: "row",

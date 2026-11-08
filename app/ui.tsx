@@ -4,14 +4,15 @@ import { HUES, hueColor, onAccentWash, theme, TYPE } from "./theme";
 import {
   addTag,
   dueLabel,
+  dismissUndo,
   patchTag,
   removeTag,
-  removeCard,
+  takeUndo,
+  undoable,
   tagOf,
   withDueDay,
   withDueTime,
   boardTags,
-  type Card,
   type Tag,
 } from "./data";
 import { clearFilters, searchQuery, tagFilter } from "./filters";
@@ -932,9 +933,9 @@ function TagManagerRow(props: { tag: () => Tag }) {
 }
 
 /**
- * A confirmation in the platform's own voice, so a destructive press is never
- * one tap away from an accident. Deleting a card cannot be undone here: the
- * tombstone that reaches the other device is the only trace left.
+ * A confirmation in the platform's own voice, for the destructive press that
+ * cannot be taken back in one line. Removing a *tag* is that press: it strips
+ * the tag from every card the user is not looking at.
  */
 export async function confirm(title: string, description: string, action: string): Promise<boolean> {
   const result = await AlertDialog.show({
@@ -948,16 +949,103 @@ export async function confirm(title: string, description: string, action: string
   return result.action === "confirm";
 }
 
-/** Asks, then removes the card (and closes whatever was showing it). */
-export async function confirmRemoveCard(card: () => Card, after?: () => void) {
-  const c = card();
-  const yes = await confirm(
-    "删除卡片？",
-    `「${c.title || "未命名卡片"}」会从看板上移除，另一台设备也会同步删除。`,
-    "删除",
+/**
+ * What just happened, and the way back from it: one line at the foot of
+ * whatever surface is showing — centred under the Mac's board, above the
+ * phone's capture button, which it must never cover.
+ *
+ * Deleting a card used to ask first. A card is kept as a tombstone with every
+ * field, so it can be written again, and an offer that expires is both faster
+ * than a dialog and reversible — the question moved here, after the act.
+ *
+ * The bar is paper on lift, no border: the same one-raised-object rule as a
+ * card. 撤销 sits on a wash of the accent, so its label takes `onAccentWash()`
+ * rather than the plain accent, which measures under the floor on its own tint:
+ * 5.07:1 on the phone's light bar, 6.88:1 on the Mac's dark one. The message
+ * takes plain ink, 11.7–17.1:1 on the same four fills.
+ */
+export function UndoToast(props: { phone?: boolean }) {
+  const phone = props.phone;
+  return (
+    <If when={undoable() !== null}>
+      <View
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          // The safe area is part of the phone's foot, exactly as it is for the
+          // capture button below: the line has to clear the button on a device
+          // with a gesture bar, not only in a test window.
+          paddingBottom: "env(safe-area-inset-bottom)",
+          paddingHorizontal: phone ? 16 : 0,
+          alignItems: phone ? "stretch" : "center",
+          // The wrapper is only a place to centre the bar: a press beside it
+          // belongs to the board, not to an invisible full-width strip.
+          pointerEvents: "box-none",
+        }}
+      >
+        <View
+          testID="undo-toast"
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 10,
+            maxWidth: phone ? 520 : 460,
+            // Above the phone's 56-point capture button and its 22-point margin,
+            // under the Mac's board.
+            marginBottom: phone ? 92 : 20,
+            paddingLeft: 14,
+            paddingRight: 6,
+            paddingVertical: 6,
+            borderRadius: 12,
+            // Chosen against the surface it floats over, which is not the same
+            // one on the two devices: the Mac's bar is paper over the desk (the
+            // ivory ground), the phone's is paper pressed into the sheet, since
+            // there it hangs over a column of paper. Both are the palette's own
+            // neutrals, and both take the same ink (14.5:1 and 13.3:1).
+            backgroundColor: phone ? theme().select : theme().card,
+            boxShadow: theme().shadowLift,
+          }}
+        >
+          <Text
+            style={{
+              flexShrink: 1,
+              fontSize: 13,
+              fontWeight: "500",
+              color: theme().text,
+              numberOfLines: 1,
+            }}
+          >
+            {undoable()?.label ?? ""}
+          </Text>
+          <View
+            testID="undo-action"
+            onPress={takeUndo}
+            role="button"
+            accessibilityLabel="撤销"
+            activeStyle={{ opacity: 0.6 }}
+            style={{
+              height: phone ? 32 : 26,
+              paddingHorizontal: phone ? 14 : 10,
+              borderRadius: 7,
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: alpha(theme().accent, theme().dark ? 0.14 : 0.09),
+            }}
+          >
+            <Text style={{ fontSize: 12.5, fontWeight: "600", color: onAccentWash() }}>撤销</Text>
+          </View>
+          <IconButton
+            name="close"
+            tint={theme().textTertiary}
+            size={phone ? 32 : 26}
+            label="关闭提示"
+            onPress={dismissUndo}
+          />
+        </View>
+      </View>
+    </If>
   );
-  if (!yes) return;
-  removeCard(c.id);
-  after?.();
 }
 

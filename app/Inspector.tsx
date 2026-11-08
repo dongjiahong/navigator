@@ -1,7 +1,7 @@
 import { Scroll, Text, View, windowSize, type JSX } from "nsh";
 import { Dialog, Input } from "nsh/base";
-import { COLUMNS, cards, patchCard, type Card, type Status } from "./data";
-import { DueEditor, IconButton, TagPicker, alpha, confirmRemoveCard } from "./ui";
+import { COLUMNS, cards, patchCard, removeWithUndo, type Card, type Status } from "./data";
+import { DueEditor, IconButton, TagPicker, alpha } from "./ui";
 import { theme, onAccentWash, TYPE } from "./theme";
 
 const BLANK = (id: string): Card => ({
@@ -199,10 +199,15 @@ export function Inspector(props: {
 
         <View style={{ flexDirection: "row", gap: 8 }}>
           <QuickAction label="移到归档" onPress={() => props.onSelectStatus("archive")} />
+          {/* No alert in front of a delete: the card is kept as a tombstone, so
+              the same press offers 撤销 at the foot of the window instead. */}
           <QuickAction
             label="删除卡片"
             danger
-            onPress={() => void confirmRemoveCard(card, props.onClose)}
+            onPress={() => {
+              removeWithUndo(card().id);
+              props.onClose();
+            }}
           />
         </View>
       </Scroll>
