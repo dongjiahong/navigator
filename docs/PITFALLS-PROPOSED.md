@@ -1,6 +1,6 @@
 # 建议加入 ~/.agents/AGENTS.md 的踩坑记录
 
-以下 22–36 条来自 Navigator 的几轮（撤销、键盘、手机端、通知、面板、备份、逐字段合并、配对码、筛选、重复与清单、真机联调）实际踩到的坑。
+以下 22–44 条来自 Navigator 的几轮（撤销、键盘、手机端、通知、面板、备份、逐字段合并、配对码、筛选、重复与清单、真机联调）实际踩到的坑。
 **建议并入 `~/.agents/AGENTS.md` 的「踩过的坑（务必照做）」一节，从 22 开始编号**，格式与那里已有的 1–21 条一致。
 
 这份文件只是待审阅的草稿：`~/.agents/AGENTS.md` 是本地全局文件，这里没有改它。
@@ -29,8 +29,8 @@
     窗口里标题栏会被平台的 title band 盖住，按钮按不到。
 31. 就地修改 vs 换对象：启动迁移若给每张卡返回副本再 `cards.set`，所有 `List` cell 重建，拖拽中途的手势直接丢；
     要就地改对象、只换数组。
-32. 合并两个并行分支时，语义冲突不会报文本冲突（一边删了图标、另一边还在用）。合并后必须跑 `nsh check` 与全量
-    测试，不能只看 `git merge` 有没有冲突。
+32. 合并两个并行分支时，语义冲突不会报文本冲突（一边删了图标、另一边还在用）。合并后必须跑 `nsh check` 与改动
+    涉及的测试文件，不能只看 `git merge` 有没有冲突。
 33. 不要把 `signal.set` 直接当回调传下去（如 `onChange={draftTags.set}`）：脱离自身 signal 调用会抛
     `not a live signal`，控件看着能按却毫无反应。用闭包 `(v) => draftTags.set(v)`。手机捕获 Sheet 的标签与
     截止曾因此在真机上完全无效，而老测试用 `openApp()`（桌面窗口）会提前 return，等于空过——手机用例要用
@@ -42,3 +42,19 @@
 36. 测试驱动 `app.drag(selector)` 落指前会把目标判为「被挡住」：目标中心点落在任一祖先 scroll view 边缘 10%
     （上限 48pt）以内，它就去滚动那个 scroll view，反复不收敛则报 `did not come into view`。可拖的目标要么
     大到中心点落在安全区，要么别贴在这圈边上。
+37. 手机行手势条内不要再多套一层 View：嵌套两层时无头引擎三次全量都在退出时 SIGSEGV；用一个 padding 或
+    margin 表达位置。
+38. Android 手势导航（`navigation_mode=2`）下，从屏幕左右边缘约 20dp 内起手的横滑会被系统返回手势吃掉，
+    触摸根本到不了 app，直接退出 app。可触达区不要进入这个区域，并且图标要跟着目标一起内移，不要只缩
+    可触达区（会留下看得见按不到的把手）。
+39. 一个 pan 激活后，同一根手指的 `onLongPress` 计时器不会自己停：慢拖滑动会在写入之后又弹出长按菜单。
+    pan grant 时要让该行的长按失效，release/terminate 时再恢复。
+40. 一次滑动写入让行消失后，引擎会把同一次抬手作为 press 派发给顶上来的那张卡：详情页打开了手指从没
+    碰过的卡。滑动结束后一小段时间（约 300ms）内忽略该行的 press。
+41. 边缘 pan 在真机上对分页 `HorizontalScrollView` 是「每一页都赢」，不是「有页可翻时 pager 赢」：让手势条只在
+    pager 无处可去的那一页生效（待办页前端、归档页尾端），其余页的边缘横滑留给翻页。
+42. `uiautomator dump` 对 nsh dev host 窗口一律返回 `null root node returned by UiTestAutomationBridge`；
+    能 dump 到的常常是桌面上别的 app，据此算坐标会打到别的 app 上。真机手测要先确认前台是 dev host。
+43. `nsh test App.tsx` 的 stdin 交互模式有 30 秒硬上限，到点 dev host 被杀并回到桌面；长时间真机手测必须
+    用文件里的长 `wait` 保持 app 在场，并且驱动器每次操作前都校验前台是 dev host（否则输入会落到已装的正式包上）。
+44. adb 限制：`adb shell input text` 只支持 ASCII，且空格后的内容会丢；`input motionevent` 的参数会被设备 shell 吞掉。

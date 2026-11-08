@@ -613,12 +613,27 @@ line of notes, then tag dots and a due pill.
 always works. A right swipe is 完成 (恢复 on a finished row), a left swipe is 归档,
 and in 归档 it is 删除 — the meanings the board already has, in the fills The Swipe
 Band Exception allows. The horizontal drag is on a narrow strip at each end of the
-row (46pt leading, 34pt trailing) rather than the whole row, because the rows sit
+row (46pt leading, 56pt trailing) rather than the whole row, because the rows sit
 inside the pager that is the four columns and a pan that activates takes the touch
 away from every scroll view around it for good: a full-width swipe would cost the
-page turn. And because the pager wins that race on the pages where it has somewhere
-to go, a **long press** opens a sheet with the same two writes plus 打开 — a gesture
-that only ever existed as a swipe would leave 归档 unreachable there.
+page turn. **Each strip acts only on the page where the pager has nowhere to go** —
+the leading one on 待办 (nothing to its left), the trailing one on 归档 (nothing to
+its right). Measured on a real Android phone, an edge pan wins the touch against
+the pager on *every* page, so a strip left armed in the middle columns archived a
+card where the finger meant to turn the page; everywhere else the same edge drag is
+the page turn. A **long press** is the row's way in on every page — a sheet with the
+same two writes plus 打开 — since a gesture that only ever existed as a swipe would
+leave most columns without one.
+
+Three more numbers come from that device. The trailing strip keeps **24pt from the
+screen's right edge**: a row's own 16pt margin is inside the system's ~20pt
+back-gesture zone, where a touch never reaches the app at all, and the mark moves
+with the target (padding would leave a handle drawn where it cannot be pressed). A
+strip is **at least 44pt wide**, which is also what the platform's own pointer
+driver needs to aim at it. And the end of a swipe is **ignored by the row it lands
+on**: by then that row is a different card, and a press there opened a sheet naming
+a card the finger never touched. While a swipe is under way its row's long-press
+timer is off, so the swipe and the sheet never both fire.
 
 ### Phone sheets
 
