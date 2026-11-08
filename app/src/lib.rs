@@ -48,6 +48,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use nsh_core::prelude::*;
 use serde_json::{Value, json};
 
+mod backup;
 mod board;
 
 const MAX_BODY: usize = 4 * 1024 * 1024;
@@ -478,6 +479,7 @@ fn respond(stream: &mut TcpStream, status: u16, body: &str) -> std::io::Result<(
 #[native_module("app/native")]
 fn native(registry: &mut Registry) {
     registry.module::<Board>();
+    registry.module::<Backup>();
     registry.module::<Sync>();
     registry.module::<Reminder>();
     registry.module::<Dock>();
@@ -543,6 +545,49 @@ impl Board {
     /// clears the user's board.
     pub fn clear() -> Result<(), String> {
         board::with(|db| board::clear(&db.conn))
+    }
+}
+
+/// The board's own backups: a JSON snapshot a day, kept for a week, and the two
+/// ways a board leaves the app and comes back.
+///
+/// The snapshot is the *store's* document, tombstones and tags included, so a
+/// restore can put a card back that was removed before the snapshot was taken.
+/// Everything here takes the folder from the interface, the way `Board.open`
+/// does: this crate has no idea where the app keeps its data, and the folder a
+/// launch uses is the one thing a test must not be able to change.
+#[module]
+pub struct Backup;
+
+#[module]
+impl Backup {
+    /// Writes today's snapshot, if there is not one already. Answers with the
+    /// name it wrote, `exists` when today's is already there, and `""` when the
+    /// board has no folder (a test, a board in memory).
+    ///
+    /// `day` is the device's own day, `YYYY-MM-DD`: a snapshot is named for the
+    /// day the user is living in, not UTC's.
+    pub fn snapshot(dir: String, day: String) -> Result<String, String> {
+        backup::snapshot(&dir, &day)
+    }
+
+    /// The backups on disk, newest first, as JSON:
+    /// `[{ name, at, cards, tags }]` — the day, when it was taken, and how much
+    /// was in it.
+    pub fn list(dir: String) -> String {
+        backup::list(&dir)
+    }
+
+    /// One backup's text. `name` must be `navigator-YYYY-MM-DD.json`: a restore
+    /// cannot be asked for a path.
+    pub fn read(dir: String, name: String) -> Result<String, String> {
+        backup::read(&dir, &name)
+    }
+
+    /// Writes an export into `dir` and answers with the path it wrote. The
+    /// interface names it; this refuses a name that is a path.
+    pub fn write(dir: String, name: String, text: String) -> Result<String, String> {
+        backup::write(&dir, &name, &text)
     }
 }
 
