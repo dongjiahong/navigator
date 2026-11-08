@@ -85,6 +85,22 @@ test("at most eight cards are offered", () => {
   expect(rows.length).toBe(8);
 });
 
+test("the lead time is five rows, and the one in use carries 当前", () => {
+  const off = rankCommands("提前", CARDS, TAGS, 0);
+  expect(off.map((row) => row.label)).toEqual([
+    "提前提醒：关闭",
+    "提前提醒：5 分钟",
+    "提前提醒：15 分钟",
+    "提前提醒：30 分钟",
+    "提前提醒：60 分钟",
+  ]);
+  // One row is the value in use, and it is the only one that says so.
+  expect(off.map((row) => row.hint)).toEqual(["当前", undefined, undefined, undefined, undefined]);
+  // Typing the number reaches it rather than a verb that merely starts with 提前.
+  const typed = rankCommands("30 分钟", CARDS, TAGS, 30);
+  expect(typed[0]).toMatchObject({ kind: "lead", lead: 30, hint: "当前", label: "提前提醒：30 分钟" });
+});
+
 test("Cmd+K opens the palette and Enter opens the card it names", async () => {
   const { app, desktop } = await openApp();
   if (!desktop) return;

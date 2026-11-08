@@ -39,6 +39,13 @@ export function isoAt(dayOffset: number, hour: number, minute = 0): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(hour)}:${p(minute)}`;
 }
 
+/** Millis → the local stamp a due is written as, `2026-11-12T14:30`. */
+export function isoOf(at: number): string {
+  const d = new Date(at);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 /**
  * The time of day a due carries, `18:00` while it has none: the due editor shows
  * a control in every state, so the field has a time to stand on before the first
