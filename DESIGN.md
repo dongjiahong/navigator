@@ -399,7 +399,18 @@ green check once it is done, grey once it is filed — because the phone finishe
 row with one tap and the Mac had no way to finish a card without opening it. The
 circle's box is the same size in every state, so titles line up down a column
 instead of stepping in where a check appears. Then the title, notes at Ink
-Secondary clipped to two lines, then one meta row of tag dots and a due pill.
+Secondary clipped to two lines, then one meta row of tag dots, a due pill, a loop
+mark when the card repeats and a check glyph with `2/5` when its note is a
+checklist.
+
+**A checklist is a note, written a certain way.** `- [ ] ` and `- [x] ` at the
+start of a note's lines *are* the list: there is no field, so the list merges,
+syncs and exports as the note it already was, and the card's two-line preview
+strips the boxes — five things read as five things rather than five rows of
+`- [ ]`. The meta row carries only a check glyph and the count, `2/5`, in tabular
+figures, and
+**the count is always Ink Tertiary**: green on this board means a finished card,
+so a checklist that is fully ticked must not dress itself as one.
 
 **The card is its own handle.** There is no grip glyph on the Mac: a press that
 moves 5 points lifts the card, and a press that does not is the press that opens
@@ -498,6 +509,30 @@ through the days. The calendar carries the hour on a strip under it, so a date i
 one decision rather than a date followed by a hunt for the field that sets when,
 and a picked day keeps the time the card already had.
 
+**A repeat is one press, not a menu.** The deadline row ends with one chip whose
+label walks 不重复 → 每天 → 每周 → 每月 → 每年 on each press, the way a tag's hue
+walks its five values: five is a count a press can finish, and a menu would be a
+second surface for a decision this small. The chip exists only where a deadline
+does — a card with nothing to repeat from has no cycle — and clearing the deadline
+clears the cycle in the same write. Off 不重复 it sits on `chip` in secondary ink;
+on any cycle it takes the accent's wash and `onAccentWash()`, and it tells a
+screen reader its own state as `重复：每周`. A card that repeats wears a loop mark
+beside the due pill, at Ink Tertiary with no colour of its own, on the Mac's card
+and on the phone's row alike.
+
+**Finishing a repeating card makes the next one.** The occurrence lands at the
+foot of 待办 with the same title, notes, tags and cycle, and a deadline advanced
+to the first occurrence strictly after the moment the card was finished — counted
+from the card's own deadline, so a card completed three weeks late still makes
+exactly one card, at the hour the deadline always had. A month and a year clamp
+to the end of a shorter month and then continue from the clamped day, so a
+monthly card set on the 31st drifts to the 28th: an approximation the deadline
+itself can correct, cheaper than a field the merge would have to carry. The next
+card's id is derived from the card the chain started from and the next deadline,
+so two devices that both finish the same card derive one id and the merge keeps
+one card; a next card the user deleted is a tombstone, and the board does not put
+it back.
+
 **A deadline notifies.** On the Mac the crate gives the date to
 `UNUserNotificationCenter`, which owns the schedule from then on: it delivers
 with the app closed, plays the sound chosen in System Settings, and lists beside
@@ -541,6 +576,17 @@ over it, and a scroll region inside a panel that has nothing to scroll is a
 trapdoor. `Input` has no height of its own, so the note's box is measured and its
 height handed to the field; the first frame falls back to a share of the panel so
 there is no flicker.
+
+**The checklist is the note, shown as rows.** Up to six of the note's checklist
+lines sit under the field — a box, the item's words, a press that flips one line
+of the same text — with a ＋ that appends `- [ ] ` at the note's foot and one
+quiet line, 还有 N 项，在备注里编辑, when there are more. Six, because a note of
+thirty items is a note to read rather than a list to tick from a panel; ticking is
+an edit of the note and not a change of status, so it moves no card and offers no
+撤销. The rows take height from the note, which is why the field has a floor
+(`NOTE_MIN` = 80) that the rows can never squeeze it past. The box's stroke is
+solid tertiary ink, not a translucent one: the blended version tests at 3.8:1,
+under what a control's edge is allowed.
 
 The note's links are listed under it — http(s) URLs found in the text, at secondary
 ink with a link glyph, never in the accent, each a press that opens the browser. A
@@ -590,7 +636,8 @@ the sheet itself — above its controls, outside any scroll view, because an inp
 nested in a scroll view has no native field on Android and no tap could ever focus
 it. Every keystroke patches the card, so there is no save button and nothing to
 lose. The sheet keeps every tap as well: status chips, tags, the deadline editor,
-archive, and a delete that offers 撤销 rather than asking.
+the note's checklist rows (on the sheet, outside any scroll view, like the fields
+they belong to), archive, and a delete that offers 撤销 rather than asking.
 
 The status chips on that sheet do **not** offer 撤销, and that is deliberate: the
 sheet is a layer over the board, so the line would be drawn underneath it — an

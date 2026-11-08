@@ -1,6 +1,6 @@
 # 建议加入 ~/.agents/AGENTS.md 的踩坑记录
 
-以下 22–32 条来自 Navigator 这一轮（撤销、键盘、手机端、通知、面板、备份、逐字段合并、配对码、筛选）实际踩到的坑。
+以下 22–36 条来自 Navigator 的几轮（撤销、键盘、手机端、通知、面板、备份、逐字段合并、配对码、筛选、重复与清单、真机联调）实际踩到的坑。
 **建议并入 `~/.agents/AGENTS.md` 的「踩过的坑（务必照做）」一节，从 22 开始编号**，格式与那里已有的 1–21 条一致。
 
 这份文件只是待审阅的草稿：`~/.agents/AGENTS.md` 是本地全局文件，这里没有改它。
@@ -31,3 +31,14 @@
     要就地改对象、只换数组。
 32. 合并两个并行分支时，语义冲突不会报文本冲突（一边删了图标、另一边还在用）。合并后必须跑 `nsh check` 与全量
     测试，不能只看 `git merge` 有没有冲突。
+33. 不要把 `signal.set` 直接当回调传下去（如 `onChange={draftTags.set}`）：脱离自身 signal 调用会抛
+    `not a live signal`，控件看着能按却毫无反应。用闭包 `(v) => draftTags.set(v)`。手机捕获 Sheet 的标签与
+    截止曾因此在真机上完全无效，而老测试用 `openApp()`（桌面窗口）会提前 return，等于空过——手机用例要用
+    `openPhone()`。
+34. 测试里不要用固定的 `wait(400)` 等界面更新再断言：机器忙时会偶发失败，且失败与改动无关。用
+    `waitFor(<目标元素>)`。
+35. `CFFIXED_USER_HOME` 不被 nsh runner 尊重，它用 `$HOME` 拼 `Library/Application Support`。要隔离数据目录就
+    `HOME=/tmp/xxx` 运行；隔离前先确认日志里的 `board dir:` 落在隔离目录，别在用户真实目录上试。
+36. 测试驱动 `app.drag(selector)` 落指前会把目标判为「被挡住」：目标中心点落在任一祖先 scroll view 边缘 10%
+    （上限 48pt）以内，它就去滚动那个 scroll view，反复不收敛则报 `did not come into view`。可拖的目标要么
+    大到中心点落在安全区，要么别贴在这圈边上。

@@ -41,7 +41,16 @@ on the phone.
 ## Capabilities and Constraints
 
 - Columns are fixed at four: 待办, 进行中, 已完成, 归档.
-- Card fields: title, tags, notes, due date and time of day.
+- Card fields: title, tags, notes, due date and time of day, and a repeat cycle
+  (每天 / 每周 / 每月 / 每年) that brings the work back: finishing a repeating card puts
+  the next occurrence at the foot of 待办, at the deadline advanced by one cycle. The
+  cycle goes with the deadline — a card with no date cannot repeat, and clearing the
+  date clears the cycle in the same write — and a month or a year that lands on a
+  shorter month clamps to that month's end.
+- A checklist is not a field: `- [ ] ` and `- [x] ` lines in the notes are the list, so
+  a list typed on the phone and edited on the Mac merges, exports and syncs as the note
+  it already is. A card shows only a check glyph and how much of it is ticked (`2/5`), and ticking is an
+  edit of the note, not a change of status.
 - A deadline reached while its card is still open notifies: a system notification
   with sound on the Mac, delivered even after the app quits; a banner inside the
   app on the phone, where Android would drop a notification the manifest cannot
