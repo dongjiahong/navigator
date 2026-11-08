@@ -148,6 +148,32 @@ test("a left swipe on the archive's last page deletes, without the sheet", async
   expect(app.texts()).toContain("已删除「看完《观海》第三季」");
 });
 
+/**
+ * The end of a swipe is also the row's press, and the row under it is not the
+ * card the finger swiped.
+ *
+ * A swipe that deletes or archives leaves another card in the slot the finger
+ * is on, and the engine hands the lift to that row as a press. Measured on a
+ * real Android device: the card was deleted correctly and the detail sheet of
+ * the card that replaced it opened on top, naming a card the finger had never
+ * touched. The row ignores a press that is a swipe's tail, and this is the test
+ * that keeps it doing so.
+ */
+test("the end of a swipe does not open the card that took its place", async () => {
+  const { app } = await openPhone();
+  if (!app) return;
+
+  await app.press("id:segment-archive");
+  await app.wait(600);
+
+  await app.drag("id:swipe-trail-c13", { x: -220 });
+  await app.wait(400);
+  expect(app.texts()).toContain("已删除「看完《观海》第三季」");
+  // The next card in 归档 is Q3 复盘会准备, and it must not be open.
+  expect(app.shows("id:phone-col-archive >> text:Q3 复盘会准备")).toBe(true);
+  expect(app.shows("id:detail-title")).toBe(false);
+});
+
 test("a short sideways move on the strip is not an action", async () => {
   const { app } = await openPhone();
   if (!app) return;

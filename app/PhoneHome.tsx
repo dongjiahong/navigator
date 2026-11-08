@@ -236,6 +236,39 @@ function swipeReach(): number {
 const rowDrags = new Map<string, AnimatedValue>();
 const rowPans = new Map<string, ReturnType<typeof PanResponder.create>>();
 
+/**
+ * The cards whose edge strip holds the touch right now.
+ *
+ * A swipe of an edge and a hold on the row are the same finger down on the same
+ * row, and the hold's timer does not stop when the strip's pan claims the touch:
+ * measured on a real Android device, a 420 ms-and-change swipe opened the row's
+ * sheet *while* it travelled, so a slow swipe deleted the card and left the sheet
+ * of the card it had just deleted over the board. The pan announces itself here
+ * on grant and leaves on release or terminate, and the hold asks before it opens
+ * anything.
+ */
+const rowSwipes = new Set<string>();
+
+/**
+ * When an edge strip last let go of a touch.
+ *
+ * The end of a swipe arrives twice: the strip's pan releases, and the row under
+ * the finger hears a press. By then that row is a different card — the swipe
+ * just moved or deleted the one that was there, and the next one took its place.
+ * Measured on a real Android device: a left swipe in 归档 deleted the card and
+ * opened the detail sheet of the card that had moved up into its place, so the
+ * sheet named a card the finger never touched. A press within a moment of a
+ * strip's release is that same finger finishing its swipe, not a tap on the row
+ * now beneath it.
+ */
+const SWIPE_PRESS_MS = 300;
+let swipedAt = 0;
+
+/** Whether a strip let go of a touch so recently that a press is its tail. */
+function wasJustSwiped(): boolean {
+  return Date.now() - swipedAt < SWIPE_PRESS_MS;
+}
+
 /** The row's travel, one value per card so both handles move the same row. */
 function dragOf(id: string): AnimatedValue {
   const found = rowDrags.get(id);
@@ -263,6 +296,11 @@ function swipeFor(id: string, edge: "lead" | "trail"): ReturnType<typeof PanResp
     // row is for. The swipe claims the touch only once it is a swipe.
     onStartShouldSetPanResponder: () => false,
     onMoveShouldSetPanResponder: () => true,
+    onPanResponderGrant: () => {
+      // The hold on the row is looking at the same finger: it must stand down,
+      // or a swipe slower than `delayLongPress` opens the sheet on the way.
+      rowSwipes.add(id);
+    },
     onPanResponderMove: (_e, g) => {
       // Beyond the reach there is nothing more to show, so the row stops at the
       // edge of its own band: the two bands each own half the row, and a travel
@@ -271,6 +309,8 @@ function swipeFor(id: string, edge: "lead" | "trail"): ReturnType<typeof PanResp
       dx.set(Math.max(-limit, Math.min(limit, g.dx)));
     },
     onPanResponderRelease: (_e, g) => {
+      rowSwipes.delete(id);
+      swipedAt = Date.now();
       // The card is read from the board by id, never from a captured accessor:
       // a list cell is recycled, and the row it is drawing now may not be the
       // one whose handler was made.
@@ -288,7 +328,11 @@ function swipeFor(id: string, edge: "lead" | "trail"): ReturnType<typeof PanResp
       }
       back(g.vx);
     },
-    onPanResponderTerminate: () => back(),
+    onPanResponderTerminate: () => {
+      rowSwipes.delete(id);
+      swipedAt = Date.now();
+      back();
+    },
   });
   rowPans.set(key, pan);
   return pan;
@@ -475,6 +519,15 @@ function PhoneRow(props: { card: () => Card }) {
   // the row is a glance, not an editor.
   const preview = () => notePreview(c().notes);
   const list = () => parseChecklist(c().notes);
+  // A strip only acts where the pager has nowhere to go: 待办 is the first page,
+  // so a right swipe there has nothing to turn to, and 归档 is the last, so a
+  // left one does not either. Everywhere else the same drag is the page turn it
+  // looks like, and the hold is the row's own way in. Measured on a real Android
+  // device: an edge pan wins the touch against the pager on every page, so a
+  // strip left armed in the middle columns archived a card where the finger
+  // meant to turn the page — the opposite of what the strips are for.
+  const lead = () => (c().status === "todo" ? swipeFor(c().id, "lead").panHandlers : {});
+  const trail = () => (c().status === "archive" ? swipeFor(c().id, "trail").panHandlers : {});
   return (
     <View
       // The two writes as custom actions, for a screen reader that has no swipe
@@ -536,13 +589,22 @@ function PhoneRow(props: { card: () => Card }) {
       </View>
       <View
         testID={`row-${c().id}`}
-        onPress={() => openCard(c().id)}
+        onPress={() => {
+          // A press that ends a swipe is the swipe's own tail (see `swipedAt`).
+          if (wasJustSwiped()) return;
+          openCard(c().id);
+        }}
         // Held down, a row offers its writes without asking the finger to travel
         // or to find an edge: the check circle, 归档, 删除 and 打开 in one sheet.
         // A hold is the phone's own mark for "more actions on this row", and it
         // is the path that works on every page — a horizontal drag inside the
         // paged columns may be claimed by the pager, a hold never is.
-        onLongPress={() => rowSheetId.set(c().id)}
+        onLongPress={() => {
+          // A finger that is already swiping an edge is not holding the row:
+          // the strip's pan announces itself on grant (see `rowSwipes`).
+          if (rowSwipes.has(c().id)) return;
+          rowSheetId.set(c().id);
+        }}
         delayLongPress={420}
         activeStyle={{ backgroundColor: theme().cardPressed }}
         style={{
@@ -560,7 +622,7 @@ function PhoneRow(props: { card: () => Card }) {
             swipe needs room to travel, and only the edge nearer the far side of
             the screen has any. */}
         <View
-          {...swipeFor(c().id, "lead").panHandlers}
+          {...lead()}
           panActivation={{ activeOffsetX: 8, failOffsetY: 20 }}
           testID={`swipe-lead-${c().id}`}
           accessibilityLabel="右滑完成任务"
@@ -598,18 +660,30 @@ function PhoneRow(props: { card: () => Card }) {
             there — the same mark the Mac's cards carry — because a gesture with
             no mark is a gesture nobody finds. Left swipe, and the room for it.
 
-            The zone is 56 points and the mark keeps the 34 it always had, at the
-            row's edge: a handle under the 44 points a thumb needs is one a thumb
-            hunts for, and the reach it grew is quiet — the mark has not moved,
-            and the pager keeps the rest of the row (see `swipeFor`). The padding
-            is that quiet reach: 22 points at the inside of the handle. */}
+            The zone is 56 points and the mark keeps the 34 it always had: a
+            handle under the 44 points a thumb needs is one a thumb hunts for,
+            and the reach it grew is quiet — the pager keeps the rest of the row
+            (see `swipeFor`). The padding is that quiet reach: 22 points at the
+            inside of the handle.
+
+            **The zone stops 24 points short of the screen's right edge, and the
+            mark comes with it.** The row already stands 16 points in, which is
+            inside the ~20 points the system keeps for its own back gesture: a
+            touch that started there never reached the app at all — measured on a
+            real Android device, a swipe aimed at the grip left the app instead.
+            Eight points of margin move the whole handle, mark and target alike —
+            padding would have left the drawn mark sitting exactly where a finger
+            cannot press it, which is the same invisible target with a mark on
+            top. The row's own background fills the eight points, so nothing else
+            on the row moves. */}
         <View
-          {...swipeFor(c().id, "trail").panHandlers}
+          {...trail()}
           panActivation={{ activeOffsetX: 8, failOffsetY: 20 }}
           testID={`swipe-trail-${c().id}`}
           accessibilityLabel="左滑归档，或在归档里删除"
           style={{
             width: 56,
+            marginRight: 8,
             paddingLeft: 22,
             alignSelf: "stretch",
             alignItems: "center",
