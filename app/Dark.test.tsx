@@ -99,3 +99,21 @@ test("mac keyboard focus dark", async () => {
   await app.keyboard.press("down");
   await app.screenshot("mac-focus-dark.png");
 });
+
+/**
+ * The 重复 chip and a ticked list, in the dark panel.
+ *
+ * The selected chip is an accent wash with a muted accent label, and the wash is
+ * weaker in dark than in light: whether the chip still reads as pressed beside
+ * the amber of a due time is what this shot is for.
+ */
+test("mac repeating card and checklist dark", async () => {
+  const app = await openSized(1280, 820, DARK);
+  if (!app || !(await canDraw(app))) return;
+  await app.press("id:card-c2");
+  await app.waitFor("id:inspector-notes");
+  await app.type("id:inspector-notes", "\n- [x] 单根 K 线的四种形态\n- [ ] 组合形态\n- [ ] 把笔记整理成自己的话");
+  await app.press("id:due-repeat");
+  await app.wait(600);
+  await app.screenshot("mac-repeat-dark.png");
+});

@@ -44,7 +44,10 @@ import {
   toggleTagFilter,
   type DueCondition,
 } from "./filters";
+import { notePreview, parseChecklist } from "./checklist";
 import {
+  ChecklistProgress,
+  ChecklistRows,
   DueBadge,
   DueEditor,
   Icon,
@@ -218,6 +221,17 @@ function swipeReach(): number {
  * two edges are where the drags are offered, and they are deliberately narrow —
  * if a sparser scroll view were ever to give this app the drags, the middle of
  * the row is still the pager's.
+ *
+ * **A handle under 44 points is a handle a thumb has to hunt for.** The leading
+ * strip holds the check circle and is 46; the trailing one is 56 rather than the
+ * 34 its grip mark alone needs, so that a left swipe starts on a target the
+ * platform would call one. The row is 358 points wide at 390, so the pager still
+ * owns 256 of them — the strips grew, the body did not shrink into a handle.
+ * `app.drag` is why the number matters to a test as well: it brings the named
+ * view "well inside" every scroll view around it first, and a point within a
+ * tenth of the pager's edge (39 of a 390-point page) sends it paging, which never
+ * converges on a paged scroll — a 34-point trailing strip sat 33 points from the
+ * edge and could not be dragged by a test at all.
  */
 const rowDrags = new Map<string, AnimatedValue>();
 const rowPans = new Map<string, ReturnType<typeof PanResponder.create>>();
@@ -457,6 +471,10 @@ function PhoneRow(props: { card: () => Card }) {
   const dx = dragOf(c().id);
   const right = () => rowActions(c().status).right;
   const left = () => rowActions(c().status).left;
+  // One line of the note under the title, with a checklist's boxes taken off:
+  // the row is a glance, not an editor.
+  const preview = () => notePreview(c().notes);
+  const list = () => parseChecklist(c().notes);
   return (
     <View
       // The two writes as custom actions, for a screen reader that has no swipe
@@ -560,27 +578,43 @@ function PhoneRow(props: { card: () => Card }) {
           >
             {c().title || "未命名卡片"}
           </Text>
-          {c().notes ? (
+          {preview() ? (
             <Text style={{ fontSize: 13, lineHeight: 19, color: theme().textSecondary, numberOfLines: 1 }}>
-              {c().notes}
+              {preview()}
             </Text>
           ) : null}
-          {c().tags.length > 0 || c().due ? (
+          {c().tags.length > 0 || c().due || list().total > 0 ? (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 11, flexWrap: "wrap", marginTop: 1 }}>
               {c().tags.length > 0 ? <TagRow ids={c().tags} size="phone" /> : null}
               {c().due ? <DueBadge iso={c().due ?? ""} size="phone" settled={settled()} /> : null}
+              {c().due && c().repeat ? (
+                <Icon name="repeat" size={12.5} tint={theme().textTertiary} width={1.9} />
+              ) : null}
+              <ChecklistProgress notes={c().notes} size="phone" />
             </View>
           ) : null}
         </View>
         {/* The trailing edge, which held only padding before: a grip is drawn
             there — the same mark the Mac's cards carry — because a gesture with
-            no mark is a gesture nobody finds. Left swipe, and the room for it. */}
+            no mark is a gesture nobody finds. Left swipe, and the room for it.
+
+            The zone is 56 points and the mark keeps the 34 it always had, at the
+            row's edge: a handle under the 44 points a thumb needs is one a thumb
+            hunts for, and the reach it grew is quiet — the mark has not moved,
+            and the pager keeps the rest of the row (see `swipeFor`). The padding
+            is that quiet reach: 22 points at the inside of the handle. */}
         <View
           {...swipeFor(c().id, "trail").panHandlers}
           panActivation={{ activeOffsetX: 8, failOffsetY: 20 }}
           testID={`swipe-trail-${c().id}`}
           accessibilityLabel="左滑归档，或在归档里删除"
-          style={{ width: 34, alignSelf: "stretch", alignItems: "center", justifyContent: "center" }}
+          style={{
+            width: 56,
+            paddingLeft: 22,
+            alignSelf: "stretch",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
         >
           <Icon name="grip" size={15} tint={alpha(theme().textTertiary, 0.75)} width={2} dot={1.2} />
         </View>
@@ -897,6 +931,13 @@ function DetailBody(props: { id: string }) {
               of the field, so a press opens the browser instead of moving the
               caret. */}
           <NoteLinks text={c().notes} size="phone" />
+          {/* The note's checklist, on the sheet and outside any scroll view: a
+              press rewrites one line of the note, so there is nothing to save. */}
+          <ChecklistRows
+            notes={c().notes}
+            size="phone"
+            onChange={(next) => patchCard(id, { notes: next })}
+          />
         </View>
       </View>
       <View style={{ paddingHorizontal: 20, paddingTop: 10, gap: 14 }}>
@@ -930,9 +971,12 @@ function DetailBody(props: { id: string }) {
         <TagPicker selected={c().tags} onChange={(ids) => patchCard(c().id, { tags: ids })} size="phone" />
         <DueEditor
           due={c().due}
+          repeat={c().repeat}
           size="phone"
           settled={settled()}
-          onChange={(iso) => patchCard(c().id, { due: iso })}
+          // A deadline cleared takes the cycle with it: nothing to repeat from.
+          onChange={(iso) => patchCard(c().id, iso ? { due: iso } : { due: undefined, repeat: undefined })}
+          onRepeatChange={(next) => patchCard(c().id, { repeat: next })}
         />
         <View style={{ flexDirection: "row", gap: 18, paddingTop: 6 }}>
           <View

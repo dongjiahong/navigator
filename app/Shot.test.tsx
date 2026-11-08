@@ -138,3 +138,39 @@ test("mac keyboard focus", async () => {
   await app.keyboard.press("down");
   await app.screenshot("mac-focus.png");
 });
+
+/**
+ * A repeating card and its checklist, in the panel and on the board.
+ *
+ * Two things only a picture settles: whether the 重复 chip crowds the deadline
+ * line it shares, and whether a list of ticked rows under a note still reads as
+ * one sheet rather than a second panel inside the panel. The board shot is the
+ * other half — the count on the card's own meta row, beside the tag and the due
+ * time it has to share the space with.
+ */
+test("mac repeating card and checklist", async () => {
+  const app = await openSized(1280, 820, LIGHT);
+  if (!app || !(await canDraw(app))) return;
+
+  await app.press("id:card-c2");
+  await app.waitFor("id:inspector-notes");
+  await app.type("id:inspector-notes", "\n- [x] 单根 K 线的四种形态\n- [ ] 组合形态\n- [ ] 把笔记整理成自己的话");
+  await app.press("id:due-repeat");
+  await app.wait(600);
+  await app.screenshot("mac-repeat.png");
+
+  await app.press("label:关闭");
+  await app.wait(600);
+  await app.screenshot("mac-repeat-board.png");
+});
+
+/** The phone's sheet with the same list under the same note. */
+test("phone checklist", async () => {
+  const app = await openSized(390, 844, LIGHT);
+  if (!app || !(await canDraw(app))) return;
+  await app.press("id:row-c2");
+  await app.waitFor("id:detail-notes");
+  await app.type("id:detail-notes", "\n- [x] 单根 K 线的四种形态\n- [ ] 组合形态\n- [ ] 把笔记整理成自己的话");
+  await app.wait(600);
+  await app.screenshot("phone-checklist.png");
+});

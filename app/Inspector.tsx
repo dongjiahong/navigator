@@ -1,9 +1,9 @@
 import { Text, View, signal, windowSize } from "nsh";
 import { Dialog, Input } from "nsh/base";
 import { COLUMNS, cards, patchCard, removeWithUndo, type Card, type Status } from "./data";
-import { DueEditor, IconButton, NoteLinks, TagPicker, alpha } from "./ui";
+import { ChecklistRows, DueEditor, IconButton, NoteLinks, TagPicker, alpha } from "./ui";
 import { charsPerLine, fieldHeight } from "./text";
-import { noteShare, panelSize } from "./panel";
+import { noteHeight as heightOfNote, panelSize } from "./panel";
 import { theme, onAccentWash, TYPE } from "./theme";
 
 const BLANK = (id: string): Card => ({
@@ -61,7 +61,10 @@ export function Inspector(props: {
   const height = () => panelSize(windowSize()).height;
   const width = () => panelSize(windowSize()).width;
   const innerWidth = () => width() - 36;
-  const noteHeight = () => (noteBox() > 0 ? noteBox() : noteShare(height()));
+  // The field is the measured box, or a share of the panel until the first
+  // layout reports one, and never under `NOTE_MIN`: a checklist under it takes
+  // space from the box, and a note narrowed to a stripe is not a note.
+  const noteHeight = () => heightOfNote(noteBox(), height());
   return (
     <Dialog
       testID="inspector"
@@ -189,8 +192,13 @@ export function Inspector(props: {
           <DueEditor
             compact
             due={card().due}
+            repeat={card().repeat}
             settled={card().status === "done" || card().status === "archive"}
-            onChange={(iso) => patchCard(card().id, { due: iso })}
+            // Clearing the deadline clears the cycle with it: a card with no
+            // deadline has nothing to repeat from, so leaving the cycle behind
+            // would be a setting no surface could show.
+            onChange={(iso) => patchCard(card().id, iso ? { due: iso } : { due: undefined, repeat: undefined })}
+            onRepeatChange={(next) => patchCard(card().id, { repeat: next })}
           />
         </View>
 
@@ -227,6 +235,10 @@ export function Inspector(props: {
               }}
             />
           </View>
+          {/* The note's checklist, under the field: ticking a line is a write to
+              the note, so the text stays the text the person typed and the rows
+              are only a way to press it. */}
+          <ChecklistRows notes={card().notes} onChange={(next) => patchCard(card().id, { notes: next })} />
           <NoteLinks text={card().notes} />
         </View>
       </View>

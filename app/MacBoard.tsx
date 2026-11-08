@@ -1,8 +1,9 @@
 import { LayoutAnimation, List, Overlay, PanResponder, Text, View, signal } from "nsh";
 import { cards, COLUMNS, moveCard, setStatus, type Card, type Status } from "./data";
+import { notePreview, parseChecklist } from "./checklist";
 import { filteredBoard, isFiltering } from "./filters";
 import { clearFocus, lists } from "./focus";
-import { DueBadge, Icon, IconButton, TagRow, clearArchive } from "./ui";
+import { ChecklistProgress, DueBadge, Icon, IconButton, TagRow, clearArchive } from "./ui";
 import { theme, TYPE } from "./theme";
 import { COL_GAP, COL_MAX, HDR_H, PAD_X, PAD_Y, ROW_GAP, ROW_TOP, boardGeom } from "./geom";
 
@@ -255,6 +256,10 @@ function CardView(props: {
   // the focused card keeps its shadow, so it reads as a card under the cursor
   // rather than a card laid into the desk. The open card wins where both apply.
   const lifted = () => props.selected || props.focused;
+  // The note as two lines of a card show it: a checklist's boxes are stripped,
+  // or a note that is mostly a list would spend the preview on `- [ ]`.
+  const preview = () => notePreview(card().notes);
+  const list = () => parseChecklist(card().notes);
   return (
     <View
       testID={`card-${card().id}`}
@@ -356,12 +361,12 @@ function CardView(props: {
           {card().title || "未命名卡片"}
         </Text>
       </View>
-      {card().notes ? (
+      {preview() ? (
         <Text style={{ ...TYPE.body, fontSize: 12.5, lineHeight: 18.5, color: theme().textSecondary, numberOfLines: 2 }}>
-          {card().notes}
+          {preview()}
         </Text>
       ) : null}
-      {card().tags.length > 0 || card().due ? (
+      {card().tags.length > 0 || card().due || list().total > 0 ? (
         <View
           style={{
             flexDirection: "row",
@@ -373,6 +378,13 @@ function CardView(props: {
         >
           {card().tags.length > 0 ? <TagRow ids={card().tags} /> : null}
           {card().due ? <DueBadge iso={card().due!} settled={settled()} /> : null}
+          {/* The cycle, as a mark beside the deadline it repeats: no colour of
+              its own, because colour here means a tag, a due time or a finished
+              card. */}
+          {card().due && card().repeat ? (
+            <Icon name="repeat" size={11.5} tint={theme().textTertiary} width={1.9} />
+          ) : null}
+          <ChecklistProgress notes={card().notes} />
         </View>
       ) : null}
     </View>

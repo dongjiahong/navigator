@@ -28,9 +28,12 @@ import {
   withDueDay,
   withDueTime,
   boardTags,
+  type Repeat,
   type Tag,
 } from "./data";
+import { appendItem, parseChecklist, toggleItem, type ChecklistItem } from "./checklist";
 import { clearFilters, filteredBoard, searchQuery } from "./filters";
+import { nextRepeat, repeatLabel } from "./repeat";
 import { linksIn } from "./text";
 
 /** `#rrggbb` → `rgba(r, g, b, a)`. */
@@ -53,7 +56,8 @@ type IconName =
   | "inbox"
   | "link"
   | "search"
-  | "filter";
+  | "filter"
+  | "repeat";
 
 const PATHS: Record<IconName, string[]> = {
   plus: ["M12 5.5v13", "M5.5 12h13"],
@@ -75,6 +79,10 @@ const PATHS: Record<IconName, string[]> = {
   search: ["M11 4.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13z", "M15.9 15.9l4.1 4.1"],
   // Three rules narrowing downwards: the board is being narrowed, not sorted.
   filter: ["M4 6.5h16", "M7 12h10", "M10.5 17.5h3"],
+  // Two arrows chasing each other round a rounded rectangle: the card comes
+  // back. Drawn at the meta row's weight, because it is a fact about the card
+  // and not a control.
+  repeat: ["M17 4.5l3 3-3 3", "M3.5 11V9.5a2 2 0 012-2h14.5", "M7 19.5l-3-3 3-3", "M20.5 13v1.5a2 2 0 01-2 2H4"],
 };
 
 /**
@@ -465,6 +473,9 @@ export function ClearFilterButton(props: { size?: "mac" | "phone" }) {
  */
 export function DueEditor(props: {
   due: string | undefined;
+  /** The cycle the card repeats on. Shown only where a deadline exists: a card
+   *  with no deadline has nothing to repeat from. */
+  repeat?: Repeat;
   size?: "mac" | "phone";
   settled?: boolean;
   /**
@@ -477,6 +488,7 @@ export function DueEditor(props: {
    */
   compact?: boolean;
   onChange: (iso: string | undefined) => void;
+  onRepeatChange?: (repeat: Repeat | undefined) => void;
 }) {
   const tree = computed(() => {
     const t = theme();
@@ -587,6 +599,9 @@ export function DueEditor(props: {
               <Text style={{ fontSize: 11.5, fontWeight: "500", color: t.danger }}>清除</Text>
             </View>
           ) : null}
+          {/* The cycle, beside 清除, and only while there is a deadline to
+              repeat: five states a press walks, the way a tag's hue does. */}
+          {due ? <RepeatChip repeat={props.repeat} onChange={props.onRepeatChange} /> : null}
         </View>
       );
     }
@@ -643,6 +658,7 @@ export function DueEditor(props: {
               <Text style={{ fontSize: phone ? 13 : 11.5, fontWeight: "500", color: t.danger }}>清除</Text>
             </View>
           ) : null}
+          {due ? <RepeatChip repeat={props.repeat} onChange={props.onRepeatChange} phone={phone} /> : null}
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <Text style={{ fontSize: phone ? 12.5 : 11.5, fontWeight: "500", color: t.textTertiary }}>时间</Text>
@@ -701,6 +717,193 @@ export function DueEditor(props: {
     );
   });
   return <>{tree()}</>;
+}
+
+/**
+ * The card's cycle, as one chip that walks 不重复 → 每天 → 每周 → 每月 → 每年.
+ *
+ * A press is the whole control. Five states is a count a press can walk through
+ * — the same argument the tag hues are decided on — and a menu for it would be a
+ * second surface for a decision one press answers. Only shown where there is a
+ * deadline: a card with nothing to repeat from has no cycle.
+ */
+function RepeatChip(props: { repeat?: Repeat; onChange?: (repeat: Repeat | undefined) => void; phone?: boolean }) {
+  const tree = computed(() => {
+    const t = theme();
+    const phone = props.phone;
+    const on = !!props.repeat;
+    return (
+      <View
+        testID="due-repeat"
+        onPress={() => props.onChange?.(nextRepeat(props.repeat))}
+        role="button"
+        accessibilityLabel={`重复：${repeatLabel(props.repeat)}`}
+        accessibilityState={{ selected: on }}
+        activeStyle={{ opacity: 0.6 }}
+        style={{
+          height: phone ? 34 : 24,
+          paddingHorizontal: phone ? 12 : 8,
+          borderRadius: phone ? 9 : 6,
+          alignItems: "center",
+          justifyContent: "center",
+          // The accent wash of a selected chip, never a new colour.
+          backgroundColor: on ? alpha(t.accent, t.dark ? 0.22 : 0.11) : t.chip,
+        }}
+      >
+        <Text
+          style={{
+            fontSize: phone ? 13 : 11.5,
+            fontWeight: "500",
+            color: on ? onAccentWash() : t.textSecondary,
+          }}
+        >
+          {repeatLabel(props.repeat)}
+        </Text>
+      </View>
+    );
+  });
+  return <>{tree()}</>;
+}
+
+/**
+ * A note's checklist, as rows under the note.
+ *
+ * The items are the note's own lines — `- [ ] 事项` — so nothing here is a
+ * field: a press rewrites one line of the same text the person typed, and the
+ * note, the merge and the export carry it without knowing about checklists.
+ *
+ * Six rows are shown. A card with more than that says how many are left and
+ * where to go: a note of thirty items is a note to read, not a list to tick from
+ * the card's panel.
+ */
+export function ChecklistRows(props: {
+  notes: string;
+  size?: "mac" | "phone";
+  onChange: (notes: string) => void;
+}) {
+  const phone = props.size === "phone";
+  const list = () => parseChecklist(props.notes);
+  return (
+    <If when={list().total > 0}>
+      <View testID="checklist" style={{ flexDirection: "row", alignItems: "flex-start", gap: 4 }}>
+        <View style={{ flex: 1, gap: phone ? 2 : 1 }}>
+          <Each of={list().items.slice(0, 6)} key={(item) => String(item.line)}>
+            {(item) => (
+              <ChecklistRow
+                item={item}
+                phone={phone}
+                onPress={() => props.onChange(toggleItem(props.notes, item().line))}
+              />
+            )}
+          </Each>
+          <If when={list().total > 6}>
+            <Text
+              style={{
+                fontSize: phone ? 12.5 : 11.5,
+                fontWeight: "500",
+                color: theme().textTertiary,
+                marginTop: phone ? 4 : 3,
+              }}
+            >
+              {`还有 ${list().total - 6} 项，在备注里编辑`}
+            </Text>
+          </If>
+        </View>
+        <IconButton
+          testID="checklist-add"
+          name="plus"
+          tint={theme().textTertiary}
+          size={phone ? 30 : 22}
+          label="添加清单项"
+          onPress={() => props.onChange(appendItem(props.notes))}
+        />
+      </View>
+    </If>
+  );
+}
+
+/** One line of a checklist: a box, the item's words, and the press that flips
+ *  it. A ticked item drops to tertiary ink — no green, which the board keeps for
+ *  a finished card. */
+function ChecklistRow(props: { item: () => ChecklistItem; phone: boolean; onPress: () => void }) {
+  const done = () => props.item().done;
+  return (
+    <View
+      testID={`checklist-toggle-${props.item().line}`}
+      onPress={props.onPress}
+      role="checkbox"
+      accessibilityLabel={props.item().text || "清单项"}
+      accessibilityState={{ checked: done() }}
+      activeStyle={{ opacity: 0.55 }}
+      style={{
+        flexDirection: "row",
+        alignItems: "flex-start",
+        gap: 8,
+        minHeight: props.phone ? 30 : 22,
+        paddingRight: 2,
+      }}
+    >
+      <View
+        style={{
+          width: props.phone ? 17 : 14,
+          height: props.phone ? 17 : 14,
+          marginTop: props.phone ? 6 : 3.5,
+          borderRadius: 4,
+          borderWidth: 1.4,
+          // Solid tertiary ink, not a translucent one: a 1.4-point stroke of it
+          // blended back into the panel lands at 3.8:1, under what a control's
+          // edge is allowed, and solid is 5.1:1 on the light panel and 5.8:1 on
+          // the dark one.
+          borderColor: theme().textTertiary,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {done() ? <Icon name="check" size={props.phone ? 11 : 9} tint={theme().textTertiary} width={2.4} /> : null}
+      </View>
+      <Text
+        style={{
+          flex: 1,
+          fontSize: props.phone ? 14 : 12.5,
+          lineHeight: props.phone ? 21 : 19,
+          color: done() ? theme().textTertiary : theme().text,
+          numberOfLines: 2,
+        }}
+      >
+        {props.item().text}
+      </Text>
+    </View>
+  );
+}
+
+/**
+ * How much of a note's checklist is ticked, as one quiet pair of numbers.
+ *
+ * It sits in a card's meta row beside the tags and the deadline, in tertiary ink
+ * and tabular figures: the count changes without the row moving, and it says a
+ * fact rather than asking for a press.
+ */
+export function ChecklistProgress(props: { notes: string; size?: "mac" | "phone" }) {
+  const phone = props.size === "phone";
+  const list = () => parseChecklist(props.notes);
+  return (
+    <If when={list().total > 0}>
+      <View testID="checklist-progress" style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+        <Icon name="check" size={phone ? 12 : 11} tint={theme().textTertiary} width={2} />
+        <Text
+          style={{
+            fontSize: phone ? 12.5 : 12,
+            fontWeight: "500",
+            letterSpacing: 0.1,
+            color: theme().textTertiary,
+            fontVariant: ["tabular-nums"],
+          }}
+        >
+          {`${list().done}/${list().total}`}
+        </Text>
+      </View>
+    </If>
+  );
 }
 
 /** The day the calendar is choosing for, or `null` while it is closed. */
