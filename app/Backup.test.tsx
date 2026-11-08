@@ -10,6 +10,7 @@ import {
   type BackupFixture,
 } from "./backup";
 import type { Card, Tag } from "./data";
+import { mergeBoards } from "./merge";
 
 /**
  * 导出、导入、从备份恢复。
@@ -180,6 +181,44 @@ test("a restore writes back what was lost, and nothing else", () => {
     at,
   );
   expect(stamps.cards.length).toBe(0);
+});
+
+test("a restored card wins every field against the tombstone that removed it", () => {
+  // The merge is per field. A restore that kept the backup's own older stamps
+  // would lose each field to the delete, and "restored" would change nothing.
+  const gone = card({
+    id: "g",
+    title: "删了",
+    deleted: true,
+    updatedAt: 90,
+    stamps: { title: 10, notes: 10, tags: 10, due: 10, status: 10, deleted: 90, rank: 10 },
+  });
+  const inBackup = card({
+    id: "g",
+    title: "原来的标题",
+    updatedAt: 10,
+    rank: 2000,
+    stamps: { title: 10, notes: 10, tags: 10, due: 10, status: 10, deleted: 10, rank: 10 },
+  });
+  const plan = planRestore({ cards: [gone], tags: [] }, { cards: [inBackup], tags: [] }, 5000);
+  const merged = mergeBoards([gone], plan.cards)[0];
+  expect(merged.deleted).toBeFalsy();
+  expect(merged.title).toBe("原来的标题");
+  expect(merged.rank).toBe(2000);
+});
+
+test("a board file keeps its columns' order and its field stamps", () => {
+  const text = boardToJson(
+    [card({ id: "r", title: "有序", rank: 3000, stamps: { title: 7, rank: 8 }, updatedAt: 8 })],
+    [],
+    1,
+  );
+  const parsed = parseBoard(text);
+  if ("error" in parsed) throw new Error(parsed.error);
+  const back = parsed.board.cards[0];
+  expect(back.rank).toBe(3000);
+  expect(back.stamps?.title).toBe(7);
+  expect(back.stamps?.rank).toBe(8);
 });
 
 test("an export is named for the day and the hour it was taken", () => {

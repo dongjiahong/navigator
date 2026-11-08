@@ -1,4 +1,5 @@
-import { COLUMNS, type Card, type Status, type Tag } from "./data";
+import { COLUMNS, type Card, type Stamps, type Status, type Tag } from "./data";
+import { MERGE_FIELDS, allFields } from "./fields";
 import { HUES, type Hue } from "./theme";
 
 /**
@@ -145,6 +146,19 @@ function asCard(item: unknown): Card | null {
   // A file that came out of the daily snapshot carries tombstones, and they are
   // kept: merging one back has to know which ids were removed.
   if (row.deleted === true) card.deleted = true;
+  // Where the card sits in its column, and when each field was last written: a
+  // board that loses them comes back unordered, and every field of it merges as
+  // if it had been written at the card's one stamp.
+  if (typeof row.rank === "number" && Number.isFinite(row.rank)) card.rank = row.rank;
+  if (row.stamps && typeof row.stamps === "object" && !Array.isArray(row.stamps)) {
+    const own = row.stamps as Record<string, unknown>;
+    const stamps: Stamps = {};
+    for (const field of MERGE_FIELDS) {
+      const at = own[field];
+      if (typeof at === "number" && Number.isFinite(at)) stamps[field] = at;
+    }
+    if (Object.keys(stamps).length) card.stamps = stamps;
+  }
   return card;
 }
 
@@ -269,7 +283,10 @@ export function planRestore(local: Board, backup: Board, at: number): RestorePla
     if (card.deleted) continue;
     const here = myCards.get(card.id);
     if (here && !here.deleted && sameCard(here, card)) continue;
-    cards.push({ ...card, deleted: false, updatedAt: at });
+    // Every field is stamped `at`, not only the card: the merge compares field
+    // by field, and the backup's own older stamps would lose each of them to the
+    // tombstone or the edit being undone.
+    cards.push({ ...card, deleted: false, updatedAt: at, stamps: allFields(at) });
   }
   const myTags = new Map(local.tags.map((tag) => [tag.id, tag]));
   const tags: Tag[] = [];
