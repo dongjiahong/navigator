@@ -1,6 +1,7 @@
 import { LayoutAnimation, List, Overlay, PanResponder, Text, View, signal } from "nsh";
 import { COLUMNS, moveCard, setStatus, type Card, type Status } from "./data";
 import { filteredBoard, isFiltering } from "./filters";
+import { lists, noteViewable } from "./focus";
 import { DueBadge, Icon, IconButton, TagRow, alpha } from "./ui";
 import { theme, TYPE } from "./theme";
 import { COL_GAP, COL_MAX, HDR_H, PAD_X, PAD_Y, boardGeom, measureBoard } from "./geom";
@@ -128,12 +129,22 @@ function DragLayer() {
   );
 }
 
-function CardView(props: { card: () => Card; selected: boolean; onSelect: () => void }) {
+function CardView(props: {
+  card: () => Card;
+  selected: boolean;
+  focused: boolean;
+  onSelect: () => void;
+}) {
   // The card comes in as the list cell's own accessor, not as an id read once:
   // a recycled cell shows another card later, and a value captured at mount
   // would keep drawing the first one.
   const card = () => props.card();
   const settled = () => card().status === "done" || card().status === "archive";
+  // Where the keyboard is. It takes the same pressed-paper fill as the open
+  // card, and is told apart by what the open card trades away for its hairline:
+  // the focused card keeps its shadow, so it reads as a card under the cursor
+  // rather than a card laid into the desk. The open card wins where both apply.
+  const lifted = () => props.selected || props.focused;
   return (
     <View
       testID={`card-${card().id}`}
@@ -146,19 +157,20 @@ function CardView(props: { card: () => Card; selected: boolean; onSelect: () => 
       // pointer rests over the card that was just clicked, so an accent ring
       // here would be the loudest object on the board and would spend the one
       // accent on something the user already pressed.
-      hoverStyle={
-        props.selected ? { backgroundColor: theme().select } : { backgroundColor: theme().cardHover }
+      hoverStyle={lifted() ? { backgroundColor: theme().select } : { backgroundColor: theme().cardHover }}
+      activeStyle={
+        lifted() ? { backgroundColor: theme().select } : { backgroundColor: theme().cardPressed }
       }
-      activeStyle={{ backgroundColor: props.selected ? theme().select : theme().cardPressed }}
       style={{
         // The open card takes the platform's selection fill. A ring drawn as a
         // zero-blur box shadow renders as nothing, so selection has to be a
         // fill plus a hairline: it is the only way to tell which card the
         // inspector owns.
-        backgroundColor: props.selected ? theme().select : theme().card,
+        backgroundColor: lifted() ? theme().select : theme().card,
         borderRadius: 10,
         // A selected card trades the shadow for its hairline: a surface carries
-        // one or the other, never both.
+        // one or the other, never both. The keyboard's card keeps the shadow —
+        // that is the whole difference between the two fills.
         borderWidth: props.selected ? 1 : 0,
         borderColor: theme().selectEdge,
         boxShadow: props.selected ? "none" : theme().shadow,
@@ -267,6 +279,7 @@ function Column(props: {
   status: Status;
   index: number;
   selectedId: string | null;
+  focusId: string | null;
   onSelect: (id: string) => void;
   onAdd: (status: Status) => void;
 }) {
@@ -311,6 +324,13 @@ function Column(props: {
         contentStyle={{ paddingBottom: 40, rowGap: 7, paddingTop: 2 }}
         style={{ flex: 1 }}
         scrollbar={false}
+        // The list is the only thing that knows what it is showing: the keys
+        // bring a card in only when it is not already there, and a drag near an
+        // edge moves it. Both go through this ref.
+        ref={(r) => {
+          lists.set(props.status, r);
+        }}
+        onViewableItemsChange={({ changed }) => noteViewable(props.status, changed)}
         onScroll={({ offset }) => {
           boardGeom.scrollY[props.index] = offset.y;
         }}
@@ -331,6 +351,7 @@ function Column(props: {
             <CardView
               card={item}
               selected={props.selectedId === item().id}
+              focused={props.focusId === item().id}
               onSelect={() => props.onSelect(item().id)}
             />
           </View>
@@ -361,6 +382,7 @@ function boardWidth(total: number) {
 export function MacBoard(props: {
   width: number;
   selectedId: string | null;
+  focusId: string | null;
   onSelect: (id: string | null) => void;
   onAdd: (status: Status) => void;
 }) {
@@ -387,6 +409,7 @@ export function MacBoard(props: {
               status={c.id}
               index={i}
               selectedId={props.selectedId}
+              focusId={props.focusId}
               onSelect={props.onSelect}
               onAdd={props.onAdd}
             />

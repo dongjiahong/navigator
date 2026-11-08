@@ -1,4 +1,14 @@
-import { Canvas, Path2D, Text, View, computed, signal, windowSize, type CanvasRenderingContext2D } from "nsh";
+import {
+  Canvas,
+  Path2D,
+  Text,
+  View,
+  computed,
+  signal,
+  windowSize,
+  type CanvasRenderingContext2D,
+  type InputRef,
+} from "nsh";
 import { AlertDialog, Calendar, Dialog, Input, TimeField, type CalendarEntry } from "nsh/base";
 import { HUES, hueColor, onAccentWash, theme, TYPE } from "./theme";
 import {
@@ -272,6 +282,13 @@ export function SearchField(props: { size?: "mac" | "phone"; width: number }) {
   return (
     <Input
       testID={phone ? "phone-search" : "board-search"}
+      ref={(r) => {
+        searchInput = r;
+      }}
+      // Escape and Cmd+F act differently while the field is being typed in, and
+      // only the field knows: the caret is the platform's, not a signal's.
+      onFocus={() => searchFocused.set(true)}
+      onBlur={() => searchFocused.set(false)}
       value={searchQuery()}
       placeholder={phone ? "搜索标题、备注或标签" : "搜索"}
       accessibilityLabel="搜索卡片"
@@ -288,6 +305,21 @@ export function SearchField(props: { size?: "mac" | "phone"; width: number }) {
       }}
     />
   );
+}
+
+/** The search field's native view, once it exists: `Cmd+F` focuses it. */
+let searchInput: InputRef | null = null;
+
+/** Whether the search field holds the keyboard, which Escape and Cmd+F read. */
+export const searchFocused = signal(false);
+
+export function focusSearch(): void {
+  searchInput?.focus();
+}
+
+export function blurSearch(): void {
+  searchInput?.blur();
+  searchFocused.set(false);
 }
 
 /**

@@ -4,8 +4,9 @@ import { MacBoard } from "./MacBoard";
 import { Inspector } from "./Inspector";
 import { PhoneHome } from "./PhoneHome";
 import { adoptWindowChrome, headerHeight, titleSpacer } from "./chrome";
-import { addCard, cards, isBlank, patchCard, removeCard, setStatus, type Status } from "./data";
-import { isFiltering } from "./filters";
+import { addCard, cards, isBlank, patchCard, removeCard, removeWithUndo, setStatus, type Status } from "./data";
+import { isFiltering, searchQuery, tagFilter } from "./filters";
+import { adopt, focusId, focusedCard, keepFocus, moveFocus, shiftFocus } from "./focus";
 import { MIN_WINDOW } from "./geom";
 import { hydrate, startPersist } from "./persist";
 import { phase, start, statusLine } from "./sync";
@@ -21,6 +22,11 @@ import {
   TagManagerButton,
   UndoToast,
   alpha,
+  blurSearch,
+  focusSearch,
+  managingTags,
+  pickingDue,
+  searchFocused,
 } from "./ui";
 
 const selectedId = signal<string | null>(null);
@@ -73,6 +79,31 @@ function SyncNote(props: { align?: "left" | "right" }) {
 
 /** Below this width the board becomes the phone's list. */
 const WIDE = 900;
+
+/**
+ * Whether a board shortcut may fire now.
+ *
+ * While a dialog owns the screen — the open card, the calendar, the tag manager
+ * — the board under it is not what the keys would act on, and moving a card the
+ * user cannot see is the kind of thing an app does once before it is trusted
+ * with nothing. The phone has no cursor to move, so there the keys find no card
+ * and do nothing.
+ */
+function boardKeys(): boolean {
+  return selectedId() === null && pickingDue() === null && !managingTags();
+}
+
+/** Space, and 空格 on the circle: open work is finished, finished work reopens. */
+function toggleFocused() {
+  const card = focusedCard();
+  if (!card) return;
+  setStatus(card.id, card.status === "done" || card.status === "archive" ? "todo" : "done");
+}
+
+function deleteFocused() {
+  const card = focusedCard();
+  if (card) removeWithUndo(card.id);
+}
 
 /**
  * Components read signals and theme where they are used, never into a local at
@@ -170,7 +201,11 @@ function MacShell() {
         <MacBoard
           width={windowSize().width}
           selectedId={selectedId()}
-          onSelect={(id) => selectedId.set(id)}
+          focusId={focusId()}
+          onSelect={(id) => {
+            if (id) adopt(id);
+            selectedId.set(id);
+          }}
           onAdd={(status) => createIn(status)}
         />
       {/* The open card floats at the middle of the window instead of docking
@@ -209,7 +244,60 @@ async function boot() {
 
 export function App() {
   keymap.bind("mod+n", () => createIn("todo"));
-  keymap.bind("escape", closeCard);
+  // Escape empties the search field while it has the keyboard, and closes the
+  // open card otherwise: in a field, Escape means "never mind this search". It
+  // is bound `always` because a text field otherwise swallows the key first —
+  // the one shortcut an input may not take for itself.
+  keymap.bind(
+    "escape",
+    () => {
+      if (searchFocused()) {
+        searchQuery.set("");
+        blurSearch();
+        return;
+      }
+      closeCard();
+    },
+    { when: "always" },
+  );
+  // Search is a field on the board, so it is one key from the board: a Mac user
+  // typing a title to find it should not have to find the field with the mouse.
+  keymap.bind("mod+f", () => {
+    if (boardKeys()) focusSearch();
+  });
+
+  // The arrow keys walk the board, Enter reads the card and Space finishes it.
+  // All of them are `notEditing`: in a title, a note or the search field those
+  // keys are the caret, the space bar and the return key. Only the arrows repeat
+  // — holding Space would toggle a card as fast as the key repeats.
+  keymap.bind(
+    {
+      up: () => boardKeys() && moveFocus("up"),
+      down: () => boardKeys() && moveFocus("down"),
+      left: () => boardKeys() && moveFocus("left"),
+      right: () => boardKeys() && moveFocus("right"),
+    },
+    { when: "notEditing", repeat: true },
+  );
+  keymap.bind(
+    {
+      enter: () => {
+        if (!boardKeys()) return;
+        const id = focusId();
+        if (id) selectedId.set(id);
+      },
+      space: () => boardKeys() && toggleFocused(),
+      // The card is kept as a tombstone and offered back, so the keyboard's
+      // delete is the same delete the panel's button makes.
+      "mod+backspace": () => boardKeys() && deleteFocused(),
+      "mod+delete": () => boardKeys() && deleteFocused(),
+      // Moving work between columns is the board's signature gesture, and these
+      // are the same move without a pointer.
+      "mod+]": () => boardKeys() && shiftFocus(1),
+      "mod+[": () => boardKeys() && shiftFocus(-1),
+    },
+    { when: "notEditing" },
+  );
   // The window's title bar is the app's own header, and it can be drawn at once:
   // nothing about it waits for the board.
   adoptWindowChrome();
@@ -241,6 +329,12 @@ export function App() {
     if (!id) return;
     if (!cards().some((c) => c.id === id && !c.deleted)) selectedId.set(null);
   });
+
+  // The keyboard's cursor follows the board: a card completed into another
+  // column takes the cursor with it, and a card deleted or filtered out hands
+  // the cursor to the one that took its row. Also an effect, for the same
+  // reason: the shell must not re-render on every keystroke for this.
+  effect(() => keepFocus());
 
 
   return (
