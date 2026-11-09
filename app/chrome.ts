@@ -1,4 +1,4 @@
-import { Window, isAvailable as hasWindow, titleBar } from "nsh/desktop";
+import { currentWindow, isAvailable as hasWindow, titleBar } from "nsh/desktop";
 
 /**
  * How much of the window's top the platform keeps for itself.
@@ -37,5 +37,5 @@ export function headerHeight(): number {
  */
 export function adoptWindowChrome() {
   if (!hasWindow) return;
-  Window.setTitleBar({ style: "hidden", height: headerHeight() });
+  currentWindow().set({ titleBar: { style: "hidden", height: headerHeight() } });
 }

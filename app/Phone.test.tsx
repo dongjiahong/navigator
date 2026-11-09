@@ -68,6 +68,26 @@ test("the capture sheet takes a tag and a day before the card exists", async () 
   expect(row.some((t) => t.includes("18:00"))).toBe(true);
 });
 
+test("the deadline time is picked from two grids, not typed", async () => {
+  const { app } = await openPhone();
+  if (!app) return;
+
+  await app.press("id:fab");
+  await app.waitFor("id:capture-title");
+  await app.type("id:capture-title", "选个时间");
+  await app.press("id:due-0");
+  await app.wait(300);
+
+  await app.press("id:due-time");
+  await app.waitFor("id:due-time-dialog");
+  await app.press("label:21 时");
+  await app.press("label:45 分");
+  expect(app.texts()).toContain("21:45");
+  await app.press("id:due-time-done");
+  await app.wait(300);
+  expect(app.texts().some((t) => t.includes("21:45"))).toBe(true);
+});
+
 test("tapping a segment moves the list to that column", async () => {
   const { app, desktop } = await openApp();
   if (desktop) return;

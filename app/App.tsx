@@ -1,9 +1,9 @@
 import { Text, View, effect, keymap, lifecycle, mount, signal, windowSize } from "nsh";
-import { isAvailable as hasWindow, Window } from "nsh/desktop";
+import { currentWindow, isAvailable as hasWindow } from "nsh/desktop";
 import { MacBoard } from "./MacBoard";
 import { Inspector } from "./Inspector";
 import { PairCodeLink, PairDialog } from "./PairDialog";
-import { PhoneHome } from "./PhoneHome";
+import { PhoneHome, openCard as openPhoneCard } from "./PhoneHome";
 import { CommandPalette, closePalette, openPalette, paletteOpen } from "./palette";
 import { BackupTool, exportBoard, importFromClipboard, openRestore } from "./BackupTool";
 import { startBackups } from "./backupStore";
@@ -29,11 +29,13 @@ import { hydrate, startPersist } from "./persist";
 import { startRecurrence } from "./recurrence";
 import { nudgeSync, openPairCode, phase, start, statusLine } from "./sync";
 import { installReminders, openRequested, startReminders } from "./reminders";
+import { startUpdates, takeUpdateAction } from "./updates";
 import { theme, onAccentWash } from "./theme";
 import {
   DueCalendar,
   Icon,
   TagManager,
+  TimePicker,
   UndoToast,
   alpha,
   blurSearch,
@@ -274,6 +276,9 @@ async function boot() {
   // for a deadline's day word and its tone, so 明天 becomes 今天 at midnight and
   // a deadline turns red at its hour with nobody touching the window.
   startClock();
+  // The app's own code, delivered as a signed package. It waits for the board
+  // and the network, and a failure is a line rather than a dialog.
+  startUpdates();
 }
 
 export function App() {
@@ -357,7 +362,9 @@ export function App() {
     const width = windowSize().width;
     // The two extra points cover a window decoration the frame includes but the
     // content size may not, so the floor is not applied over and over.
-    if (width >= WIDE && width < MIN_WINDOW) Window.setFrame({ size: { width: MIN_WINDOW + 2 } });
+    if (width >= WIDE && width < MIN_WINDOW) {
+      currentWindow().setBounds({ size: { width: MIN_WINDOW + 2 } });
+    }
   });
 
   // Close the inspector when the open card is removed on the other device.
@@ -378,8 +385,13 @@ export function App() {
     if (!id) return;
     openRequested.set(null);
     if (!cards().some((c) => c.id === id && !c.deleted)) return;
-    adopt(id);
-    selectedId.set(id);
+    if (windowSize().width >= WIDE) {
+      adopt(id);
+      selectedId.set(id);
+    } else {
+      // The phone reads a card through its own sheet, not the Mac's panel.
+      openPhoneCard(id);
+    }
   });
 
   // The keyboard's cursor follows the board: a card completed into another
@@ -433,11 +445,15 @@ export function App() {
         onExport={(kind) => void exportBoard(kind)}
         onImport={() => void importFromClipboard()}
         onRestore={openRestore}
+        onUpdate={() => void takeUpdateAction()}
       />
 
       {/* One month for both layouts, for the same reason: the deadline editor on
           the Mac's card and on the phone's sheet opens the same calendar. */}
       <DueCalendar />
+      {/* The same hour-and-minute grid for both layouts: the deadline's time is
+          one press on the row and two taps in the picker, never a keyboard. */}
+      <TimePicker />
       {/* The six digits a phone proves it knows. A panel over the board, like
           every other thing the Mac opens: nothing moves to show it. */}
       <PairDialog />

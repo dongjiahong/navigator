@@ -8,8 +8,10 @@ import { openApp } from "./testkit";
  * Deadlines reach further than the pill on a card.
  *
  * On the Mac a due date becomes a real system notification, owned by the crate
- * (`Reminder`); on the phone no system notification can be posted at all, so a
- * deadline that comes due while the app is open puts a banner on the list.
+ * (`Reminder`). The phone can post one now (`Notifications`) while the app is
+ * running, and falls back to a banner when the permission is missing. These
+ * tests keep to the pure decisions and the banner; the phone's system
+ * notification is checked on an Android device, not by this headless runner.
  *
  * `epochOf`, `remindsAt`, `reminderPlan` and `applyResponse` are the whole
  * scheduling and answering decision, so they are tested as pure functions: they

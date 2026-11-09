@@ -36,10 +36,11 @@
 //! client, because Android blocks cleartext HTTP to a LAN address by policy, and
 //! this traffic never leaves the LAN.
 //!
-//! The crate also owns the deadline reminders. nsh has no notification API, so
-//! the Mac's go through `UNUserNotificationCenter` here, where a due date
-//! becomes a real system notification that plays the system's sound and that
-//! macOS delivers even after the app quits.
+//! The crate also owns the Mac's scheduled deadline reminders, which go through
+//! `UNUserNotificationCenter` here: a due date becomes a real system notification
+//! that plays the system's sound and that macOS delivers even after the app
+//! quits. The phone's due-now notification is nsh's `Notifications`, used from
+//! `reminders.ts` while the app is running.
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
@@ -1240,20 +1241,18 @@ impl Sync {
     }
 }
 
-/// Deadline reminders.
+/// Deadline reminders: the Mac's scheduled half.
 ///
-/// nsh has no notification API, so this is the one place a due date leaves the
-/// app: the Mac hands it to `UNUserNotificationCenter`, which owns the schedule
-/// from then on. The system delivers it whether or not the app is still open,
-/// plays the sound the user chose in Settings, and lists it in Notification
-/// Centre beside every other app's.
+/// The Mac hands a due date to `UNUserNotificationCenter`, which owns the
+/// schedule from then on. The system delivers it whether or not the app is still
+/// open, plays the sound the user chose in Settings, and lists it in
+/// Notification Centre beside every other app's.
 ///
-/// Android cannot be served the same way: a notification needs
-/// `POST_NOTIFICATIONS` in the manifest on API 33 and newer, and `nsh package`
-/// writes that manifest with `INTERNET` alone and offers no way to add to it.
-/// So `status` says `unsupported` there and the phone reminds from inside the
-/// app instead, which is honest about what it can do rather than posting a
-/// notification the system drops.
+/// The phone has nsh's `Notifications` (main, after 0.4.0) but it only shows a
+/// notification now: there is no trigger that survives the app. So the phone's
+/// due-now reminder lives in `reminders.ts`, which asks for the permission and
+/// posts under `navigator.card.<id>` while the app is running. This module still
+/// answers `unsupported` on Android, because nothing here can schedule one.
 #[module]
 pub struct Reminder;
 

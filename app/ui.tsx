@@ -14,7 +14,7 @@ import {
   type CanvasRenderingContext2D,
   type InputRef,
 } from "nsh";
-import { AlertDialog, Calendar, Dialog, Input, TextView, TimeField, type CalendarEntry } from "nsh/base";
+import { AlertDialog, Calendar, Dialog, Input, TextView, type CalendarEntry } from "nsh/base";
 import { HUES, hueColor, onAccentWash, theme, TYPE } from "./theme";
 import {
   addTag,
@@ -60,7 +60,8 @@ type IconName =
   | "link"
   | "search"
   | "filter"
-  | "repeat";
+  | "repeat"
+  | "clock";
 
 const PATHS: Record<IconName, string[]> = {
   plus: ["M12 5.5v13", "M5.5 12h13"],
@@ -85,6 +86,9 @@ const PATHS: Record<IconName, string[]> = {
   // back. Drawn at the meta row's weight, because it is a fact about the card
   // and not a control.
   repeat: ["M17 4.5l3 3-3 3", "M3.5 11V9.5a2 2 0 012-2h14.5", "M7 19.5l-3-3 3-3", "M20.5 13v1.5a2 2 0 01-2 2H4"],
+  // A face and its hands: the due time's own button, so the row says what
+  // pressing it changes without a 时间 caption.
+  clock: ["M12 3.5a8.5 8.5 0 100 17 8.5 8.5 0 000-17z", "M12 7.5v4.8l3.3 2"],
 };
 
 /**
@@ -472,6 +476,48 @@ export function ClearFilterButton(props: { size?: "mac" | "phone" }) {
 }
 
 /**
+ * The deadline's time, as a button.
+ *
+ * It used to be a `TimeField`: a row of segments that asks for a selection and
+ * a keyboard, which is a hard target on a phone and a slow one on a Mac. A
+ * press opens the app's own picker — two grids, hours and five-minute minutes
+ * — and the time stays one word on the row.
+ */
+function TimeChip(props: { time: string; phone?: boolean; testID?: string; onPress: () => void }) {
+  const phone = props.phone ?? false;
+  return (
+    <View
+      testID={props.testID ?? "due-time"}
+      onPress={props.onPress}
+      role="button"
+      accessibilityLabel={`截止时间 ${props.time}`}
+      activeStyle={{ opacity: 0.65 }}
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 5,
+        height: phone ? 34 : 26,
+        paddingHorizontal: phone ? 10 : 8,
+        borderRadius: phone ? 9 : 6,
+        backgroundColor: theme().chip,
+      }}
+    >
+      <Icon name="clock" size={phone ? 13 : 11.5} tint={theme().textTertiary} width={1.8} />
+      <Text
+        style={{
+          fontSize: phone ? 14 : 12.5,
+          fontWeight: "500",
+          color: theme().text,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {props.time}
+      </Text>
+    </View>
+  );
+}
+
+/**
  * The card's deadline. The three chips set a day and leave the time alone —
  * pressing 明天 on a 14:30 deadline means tomorrow at 14:30 — the field beside
  * them sets that time, and the calendar sets any day at all, with a time row of
@@ -577,25 +623,10 @@ export function DueEditor(props: {
               </View>
             );
           })}
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              height: 24,
-              paddingHorizontal: 7,
-              borderRadius: 6,
-              backgroundColor: t.chip,
-            }}
-          >
-            <TimeField
-              testID="due-time"
-              value={time}
-              onChange={({ value }) => props.onChange(withDueTime(due, value))}
-              accessibilityLabel="截止时间"
-              segmentStyle={{ fontSize: 12, fontWeight: "500", color: t.text, fontVariant: ["tabular-nums"] }}
-              separatorStyle={{ fontSize: 12, fontWeight: "500", color: t.textSecondary }}
-            />
-          </View>
+          <TimeChip
+            time={time}
+            onPress={() => openDueTime(time, (value) => props.onChange(withDueTime(due, value)))}
+          />
           {due ? (
             <View
               testID="due-clear"
@@ -671,30 +702,11 @@ export function DueEditor(props: {
         </View>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <Text style={{ fontSize: phone ? 12.5 : 11.5, fontWeight: "500", color: t.textTertiary }}>时间</Text>
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              height: phone ? 34 : 26,
-              paddingHorizontal: phone ? 10 : 8,
-              borderRadius: 6,
-              backgroundColor: t.chip,
-            }}
-          >
-            <TimeField
-              testID="due-time"
-              value={time}
-              onChange={({ value }) => props.onChange(withDueTime(due, value))}
-              accessibilityLabel="截止时间"
-              segmentStyle={{
-                fontSize: phone ? 14 : 12.5,
-                fontWeight: "500",
-                color: t.text,
-                fontVariant: ["tabular-nums"],
-              }}
-              separatorStyle={{ fontSize: phone ? 14 : 12.5, fontWeight: "500", color: t.textSecondary }}
-            />
-          </View>
+          <TimeChip
+            time={time}
+            phone={phone}
+            onPress={() => openDueTime(time, (value) => props.onChange(withDueTime(due, value)))}
+          />
           {/* Any day, not only the three above: this opens a month on a dialog
               the app owns. `DatePicker` would do the same thing, but its popup
               draws as a transparent layer here — the card underneath shows
@@ -1205,30 +1217,20 @@ export function DueCalendar() {
       </View>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
         <Text style={{ fontSize: 11.5, fontWeight: "500", color: theme().textTertiary }}>时间</Text>
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            height: 28,
-            paddingHorizontal: 8,
-            borderRadius: 6,
-            backgroundColor: theme().chip,
+        <TimeChip
+          testID="calendar-time"
+          time={pickingDue() && pickingDue()!.length >= 16 ? pickingDue()!.slice(11, 16) : "18:00"}
+          onPress={() => {
+            const shown = pickingDue();
+            if (!shown) return;
+            const time = shown.length >= 16 ? shown.slice(11, 16) : "18:00";
+            openDueTime(time, (value) => {
+              const current = pickingDue();
+              if (!current) return;
+              chooseDue(`${current.slice(0, 10)}T${value}`);
+            });
           }}
-        >
-          <TimeField
-            testID="calendar-time"
-            value={pickingDue() && pickingDue()!.length >= 16 ? pickingDue()!.slice(11, 16) : "18:00"}
-            onChange={({ value }) => {
-              const shown = pickingDue();
-              if (!shown) return;
-              const day = shown.slice(0, 10);
-              chooseDue(`${day}T${value}`);
-            }}
-            accessibilityLabel="截止时间"
-            segmentStyle={{ fontSize: 12.5, fontWeight: "500", color: theme().text, fontVariant: ["tabular-nums"] }}
-            separatorStyle={{ fontSize: 12.5, fontWeight: "500", color: theme().textSecondary }}
-          />
-        </View>
+        />
         <View style={{ flex: 1 }} />
         <View
           testID="calendar-done"
@@ -1249,6 +1251,181 @@ export function DueCalendar() {
         </View>
       </View>
     </Dialog>
+  );
+}
+
+/** The hour and minute choices the picker draws. Minutes are five apart. */
+const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0"));
+const MINUTES = Array.from({ length: 12 }, (_, i) => String(i * 5).padStart(2, "0"));
+
+/** The time the picker is choosing for, or `null` while it is closed. */
+export const pickingTime = signal<string | null>(null);
+/** What a picked time is written to; the card or the calendar, whichever opened it. */
+let applyingTime: ((value: string) => void) | null = null;
+
+/** Opens the picker on `time`, and writes every press to `apply`. */
+export function openDueTime(time: string, apply: (value: string) => void) {
+  pickingTime.set(time);
+  applyingTime = apply;
+}
+
+function chooseTime(value: string) {
+  pickingTime.set(value);
+  applyingTime?.(value);
+}
+
+/** The clock's own time, to the minute, for the picker's 现在. */
+function nowTime(): string {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/**
+ * The hour and the minute as two grids, not a text field.
+ *
+ * A deadline is picked with a thumb: 24 hours and twelve five-minute steps are
+ * large targets that never open a keyboard, and the selected pair is readable
+ * at a glance. 现在 keeps the exact minute when the user wants it; a card with
+ * an odd minute keeps that minute until a grid cell is pressed.
+ */
+export function TimePicker() {
+  const value = () => pickingTime() ?? "18:00";
+  const hour = () => value().split(":")[0] ?? "18";
+  const minute = () => value().split(":")[1] ?? "00";
+  return (
+    <Dialog
+      testID="due-time-dialog"
+      open={pickingTime() !== null}
+      animation="fade"
+      onOpenChange={({ open }) => {
+        if (!open) pickingTime.set(null);
+      }}
+      backdropStyle={{ backgroundColor: theme().scrim }}
+      style={{
+        margin: "auto",
+        width: 300,
+        borderRadius: 16,
+        backgroundColor: theme().panel,
+        padding: 14,
+        gap: 10,
+        boxShadow: theme().shadowLift,
+      }}
+    >
+      <View style={{ flexDirection: "row", alignItems: "center" }}>
+        <Text style={{ fontSize: 14, fontWeight: "600", color: theme().text }}>截止时间</Text>
+        <View style={{ flex: 1 }} />
+        <IconButton
+          name="close"
+          tint={theme().textSecondary}
+          size={28}
+          label="关闭"
+          onPress={() => pickingTime.set(null)}
+        />
+      </View>
+      <Text
+        testID="due-time-value"
+        style={{
+          fontSize: 28,
+          fontWeight: "500",
+          color: theme().text,
+          textAlign: "center",
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {value()}
+      </Text>
+      <Text style={{ fontSize: 11.5, fontWeight: "600", color: theme().textTertiary, letterSpacing: 0.3 }}>小时</Text>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4 }}>
+        {HOURS.map((h) => (
+          <TimeCell
+            label={h}
+            accessibilityLabel={`${h} 时`}
+            selected={h === hour()}
+            onPress={() => chooseTime(`${h}:${minute()}`)}
+          />
+        ))}
+      </View>
+      <Text style={{ fontSize: 11.5, fontWeight: "600", color: theme().textTertiary, letterSpacing: 0.3 }}>分钟</Text>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4 }}>
+        {MINUTES.map((m) => (
+          <TimeCell
+            label={m}
+            accessibilityLabel={`${m} 分`}
+            selected={m === minute()}
+            onPress={() => chooseTime(`${hour()}:${m}`)}
+          />
+        ))}
+      </View>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <View
+          testID="due-time-now"
+          onPress={() => chooseTime(nowTime())}
+          role="button"
+          accessibilityLabel="现在"
+          activeStyle={{ opacity: 0.6 }}
+          style={{ height: 30, paddingHorizontal: 10, borderRadius: 7, justifyContent: "center" }}
+        >
+          <Text style={{ fontSize: 12.5, fontWeight: "500", color: theme().textSecondary }}>现在</Text>
+        </View>
+        <View style={{ flex: 1 }} />
+        <View
+          testID="due-time-done"
+          onPress={() => pickingTime.set(null)}
+          role="button"
+          accessibilityLabel="完成"
+          activeStyle={{ opacity: 0.6 }}
+          style={{
+            height: 30,
+            paddingHorizontal: 14,
+            borderRadius: 7,
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: alpha(theme().accent, theme().dark ? 0.2 : 0.1),
+          }}
+        >
+          <Text style={{ fontSize: 12.5, fontWeight: "600", color: onAccentWash() }}>完成</Text>
+        </View>
+      </View>
+    </Dialog>
+  );
+}
+
+/** One hour or five-minute cell: a target a thumb can hit without aiming. */
+function TimeCell(props: {
+  label: string;
+  accessibilityLabel: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <View
+      onPress={props.onPress}
+      role="button"
+      accessibilityLabel={props.accessibilityLabel}
+      accessibilityState={{ selected: props.selected }}
+      activeStyle={{ opacity: 0.6 }}
+      style={{
+        width: 42,
+        height: 32,
+        borderRadius: 7,
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: props.selected
+          ? alpha(theme().accent, theme().dark ? 0.24 : 0.11)
+          : theme().chip,
+      }}
+    >
+      <Text
+        style={{
+          fontSize: 12.5,
+          fontWeight: "500",
+          color: props.selected ? onAccentWash() : theme().textSecondary,
+          fontVariant: ["tabular-nums"],
+        }}
+      >
+        {props.label}
+      </Text>
+    </View>
   );
 }
 

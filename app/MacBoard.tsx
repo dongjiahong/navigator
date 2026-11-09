@@ -24,8 +24,15 @@ const dragging = signal<{
   lineY: number;
 } | null>(null);
 
-/** Responders are made once per card: one rebuilt on each render drops the gesture. */
-const pans = new Map<string, ReturnType<typeof PanResponder.create>>();
+/**
+ * Responders are made once per cell's item accessor, not per card id.
+ *
+ * A recycled cell keeps its accessor while the accessor's value becomes another
+ * card. Binding the id at mount made the next card in that cell drag the card
+ * it replaced — a deleted one — so cards after a deletion silently stopped
+ * moving. The grant reads `card()` at the moment of the press instead.
+ */
+const pans = new WeakMap<() => Card, ReturnType<typeof PanResponder.create>>();
 
 /**
  * Where each column's list sits in the window comes from `onLayout` on the
@@ -181,18 +188,18 @@ function cancelDrag(): void {
  * body drags, so a handle in its corner was a second way to do the same thing
  * and a place the title could not use.
  */
-function panFor(cardId: string) {
-  const cached = pans.get(cardId);
+function panFor(card: () => Card) {
+  const cached = pans.get(card);
   if (cached) return cached;
   const pan = PanResponder.create({
     onStartShouldSetPanResponder: () => false,
     onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: (e) => beginDrag(cardId, e.pageX, e.pageY),
+    onPanResponderGrant: (e) => beginDrag(card().id, e.pageX, e.pageY),
     onPanResponderMove: (_e, g) => moveDrag(g.moveX, g.moveY),
     onPanResponderRelease: endDrag,
     onPanResponderTerminate: cancelDrag,
   });
-  pans.set(cardId, pan);
+  pans.set(card, pan);
   return pan;
 }
 
@@ -263,7 +270,7 @@ function CardView(props: {
   return (
     <View
       testID={`card-${card().id}`}
-      {...panFor(card().id).panHandlers}
+      {...panFor(props.card).panHandlers}
       // The whole card is the handle: a press that does not move is a press that
       // opens it, and the same press that moves 5 points lifts it. Nothing in
       // the card takes the gesture sooner — the circle stays a circle because it

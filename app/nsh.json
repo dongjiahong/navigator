@@ -1,8 +1,15 @@
 {
   "name": "Navigator",
   "id": "com.lele.navigator",
-  "version": "1.1.0",
-  "build": 2,
+  "version": "0.1.5",
+  "build": 5,
   "icon": "icon.png",
-  "rust": "."
+  "rust": ".",
+  "updater": {
+    "github": "dongjiahong/navigator",
+    "publicKey": "OsfGa2msbKoUUMNeNobHV9m+6h7dazBu8bYrzDSc9MI=",
+    "packages": {
+      "roots": ["SD078bugJYbeyqgikd4r5dGjz/54nnI6VpjTpWZJC6A="]
+    }
+  }
 }

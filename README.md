@@ -4,7 +4,7 @@
 
 技术栈是 [Native Shell (nsh)](https://nsh.dev)：界面用 TSX，同步服务用 Rust，编译成各自平台的原生视图，没有 WebView。
 
-窗口不保留系统标题栏：`Window.setTitleBar({ style: "hidden", height })` 让 App 顶到窗口上沿，地面的渐变一直画到交通灯底下，整条可拖动移动窗口。平台的标题条区域仍然吃掉那一条上的点击——画在上面的按钮看得见、按不到——所以头条分两段：`titleSpacer()` 先让出平台自留的高度，下面 38pt 才是 App 自己的控制（`headerHeight()` 把两段加起来交给 `setTitleBar`，也用它对齐「领航」和「新建」）。留下一条原生 App 没画的系统栏，看起来就像浏览器里的网页。
+窗口不保留系统标题栏：`currentWindow().set({ titleBar: { style: "hidden", height } })` 让 App 顶到窗口上沿，地面的渐变一直画到交通灯底下，整条可拖动移动窗口。平台的标题条区域仍然吃掉那一条上的点击——画在上面的按钮看得见、按不到——所以头条分两段：`titleSpacer()` 先让出平台自留的高度，下面 38pt 才是 App 自己的控制（`headerHeight()` 把两段加起来交给 title bar 设置，也用它对齐「领航」和「新建」）。留下一条原生 App 没画的系统栏，看起来就像浏览器里的网页。
 
 ## 界面上的几条硬规矩
 
@@ -12,17 +12,17 @@
 - **卡片是浮起来的，不是挤出来的。** 点开一张卡，它浮在窗口正中（`min(560, 窗口宽 - 80)` × `min(720, 窗口高 - 96)`，`shadowLift`），四列宽度一点不动；早先它是挤在右边的一列，一打开卡看板就重排，手指刚点的那个位置就换了东西。
 - **没有滚动条。** 所有 `Scroll` / `List` 都写 `scrollbar={false}`：一页纸边上出现一条系统画的长条，是 App 没画的界面。
 - **标签是用户的数据。** 标签有名字和五种色相（蓝色相由深到浅都在调色板里定义了两遍），在标签管理器里改名、换色、删除；删除会从所有卡片上取下，并且和卡片一样按 `updatedAt` 同步、留墓碑。
-- **截止有具体时间，也有日历。** 今天 / 明天 / 下周 只改日期，时间留着不动；`TimeField` 改时分；日历面板选任意一天（`Calendar` 自己画出星期几和月份，因为 nsh 的 `Calendar` 不画任何字，而且它的弹层在这个引擎里是透明的）。卡片上永远显示到分钟。
+- **截止有具体时间，也有日历。** 今天 / 明天 / 下周 只改日期，时间留着不动；点时间胶囊打开 App 自己的时间选择器：24 个小时格加 12 个五分钟格，拇指点两下就选完，不再对着 `TimeField` 的时分段敲键盘；“现在”保留当前分钟。日历面板选任意一天（`Calendar` 自己画出星期几和月份，因为 nsh 的 `Calendar` 不画任何字，而且它的弹层在这个引擎里是透明的）。卡片上永远显示到分钟。
 - **删除不再先问，而是可以撤销。** 删卡、完成、归档都会在底部出一条一行提示（`UndoToast`：纸色填充——Mac 用 `card`、手机用 `select`——`shadowLift`、无边框，Mac 居中在窗口底、手机在「添加」按钮上方），6 秒、一次一条；按「撤销」把卡写回去，连它原来的列内位置也还回来。卡片本身是墓碑，撤销就是一次 `deleted: false` 的普通写入。**标签删除仍然先问**——它会把用户没在看的卡片上的标签一起摘下；清空归档、清除示例数据这类批量操作也先问，并在平台原生 `AlertDialog` 里点名数量。
 - **整张卡就是把手。** Mac 上没有单独的拖拽把手：按住卡移动 5pt 就把它拎起来（跨列、跨位置），按住不动就是点开。拖到列顶或列底 48pt 以内会自动滚动，越靠边越快。键盘做同样的事：方向键走卡，回车打开，空格完成/恢复，`Cmd+]` / `Cmd+[` 换列，`Cmd+K` 命令面板，`Cmd+F` 跳到搜索框，`Cmd+N` 新建。
 - **筛选是本机的视图，不是看板的数据。** 标签可以多选（命中任一即可）、日期条件三选一（今天 / 已逾期 / 无日期），再叠一个搜索框（标题、备注和标签名都能搜）。三者一起收窄，数量始终是整个看板的数。筛选状态只活在各自设备的进程里，不跟着同步走。
-- **截止会提醒。** Mac 上是一条真正的系统通知（Rust 侧直接走 `UNUserNotificationCenter`，带系统通知音，App 退出后照样送达）；手机上系统通知发不出去（见下），所以在 App 打开时用横幅提醒。
+- **截止会提醒。** Mac 上是一条真正的系统通知（Rust 侧直接走 `UNUserNotificationCenter`，带系统通知音，App 退出后照样送达）；手机在 App 打开时也能发真正的系统通知（nsh main 的 `Notifications`，APK 现在带 `POST_NOTIFICATIONS`），点通知会打开那张卡；没有权限或平台发不了时，退回列表上方的横幅。App 关闭后手机仍然不会到点唤醒。
 
 ---
 
 ## 提醒（截止时间的通知）
 
-nsh 0.4.0 没有任何通知 API，所以这块能力写在 Rust crate 里（`app/src/lib.rs` 的 `Reminder`）。
+nsh 0.4.0 没有任何通知 API。App 现在把 nsh 固定到 main 的 `36b9168`（nightly）：Mac 的**定时**通知仍写在 Rust crate 里（`app/src/lib.rs` 的 `Reminder`），手机用 nsh 新增的 `Notifications` 发**立即**通知（`app/reminders.ts`）。
 
 **Mac：走系统通知中心。** `UNUserNotificationCenter` 按卡片 id 建请求，触发时间是「距现在多少秒」，内容带标题、备注摘要和 `UNNotificationSound::defaultSound()`——声音是用户在「系统设置 → 通知 → 领航」里选的那个，不是 App 自己塞的文件。调度权交给系统之后，App 退出、关机重启都不影响送达。被系统拒绝时（没授权）走 `status()` 回报 `denied`，界面不会假装通知过。
 
@@ -34,9 +34,37 @@ nsh 0.4.0 没有任何通知 API，所以这块能力写在 Rust crate 里（`ap
 - **通知上带两个动作。** 注册在自己的 category（`navigator.reminder`）里：「完成」和「推迟 1 小时」，点通知本体则打开这张卡。系统把回答记在队列里，Rust 侧 `Reminder.takeResponses()` 轮询取回，界面按一次普通写入处理。**这三条交互（两个动作按钮、点本体打开卡）没有人工点过**——本机拿不到可用的通知点击授权，行为以测试为准。
 - **启动后要对账。** App 退出后立刻重开时，`UNUserNotificationCenter` 会无声丢掉一部分已经排好的请求，所以启动后不只相信自己的记账：`Reminder.pending()` 读回系统实际持有的 id，缺的补排、多的撤掉。
 
-**Android：发不了系统通知。** Android 13+ 需要 manifest 里有 `POST_NOTIFICATIONS`，而 `nsh package` 写的 manifest 只有 `INTERNET`，也没有任何配置项能加（`nsh.json` 的键是白名单）。所以 `Reminder.status()` 在 Android 上直接是 `unsupported`，手机改用在 App 打开时检查「五分钟内刚到期」的卡，在列表上方出一条横幅，可以「打开」或「知道了」。
+**Android：App 打开时能发系统通知。** nsh main 增加了 `Notifications`，`nsh package` 在 App 可以通知时会往 manifest 写 `POST_NOTIFICATIONS`（不声明 `capabilities` 的独立 App 默认拥有这项能力）。`reminders.ts` 在 Android 上读取/请求通知权限；App 每 20 秒检查一次「五分钟内刚到期」的卡，有权限就发一条 `id` 为 `navigator.card.<卡片 id>` 的系统通知，标题是「到时间了：…」，点通知会打开手机的卡片详情页。权限被拒或平台发不了时，仍然退回列表上方的横幅（「打开」/「知道了」）。手机「连到 Mac」Sheet 里新增了「通知」一栏：一行显示当前权限状态，旁边「测试」按钮会请求权限并发一条「通知测试」，不用等到某个截止时间。
+
+**通知开关是灰色时先确认安装包。** 本仓库打出的 `0.1.5 (build 5)` APK 的 manifest 里同时有 `INTERNET` 和 `POST_NOTIFICATIONS`；旧包没有后者，Android 13+ 的通知页就会把开关画成灰的、点不动。用 `app/.nsh/out/Navigator.apk` 覆盖安装（`adb install -r`，保留数据），再打开 App 看「连到 Mac → 通知」。如果版本已经是 0.1.5 但开关仍灰，检查这台手机上领航是不是被停用、被工作资料/家长控制限制，或装在另一个用户下；用下面的命令能看到实际装的是哪个包、有没有声明权限：
+
+```sh
+adb shell dumpsys package com.lele.navigator | grep -E 'versionName|versionCode|POST_NOTIFICATIONS'
+adb shell cmd appops get com.lele.navigator POST_NOTIFICATION
+```
+
+如果权限只是被拒（不是灰），可以直接补授，不用重装：
+
+```sh
+adb shell pm grant com.lele.navigator android.permission.POST_NOTIFICATIONS
+```
+
+**仍然没有“App 关闭时到点提醒”。** 新 API 只有 `show`，没有 `schedule(at:)` 或 `AlarmManager` 一类的后台唤醒；手机在 App 没运行时不会在截止时刻自己醒来。提前提醒和通知上的「完成 / 推迟 1 小时」两枚按钮也仍只在 Mac 上。
 
 **开发/测试进程没有通知中心。** `nsh test` 的 runner 是没有 bundle 的裸可执行文件，`currentNotificationCenter` 会抛 Objective-C 异常直接 abort 进程。所以调用前先看 `NSBundle.mainBundle().bundleIdentifier()`，再用 `objc2::exception::catch` 兜一层——无头跑测试不会因此崩，端口和测试都不受影响。
+
+---
+
+## OTA 更新
+
+App 的 TSX 可以作为签名包（`.nshpkg`）从 GitHub Release 下发，不用每次重新装 APK。**装一次 `0.1.5 (build 5)` 的 APK 之后**，只改界面、逻辑、图片和字体都可以走 OTA；改 Rust crate、nsh runtime、权限或 manifest 仍然要出新 APK。
+
+- `app/nsh.json` 的 `updater` 指向 `dongjiahong/navigator` 的最新 Release，并写了两个公钥：`publicKey` 验 `latest.json`，`packages.roots` 验 `.nshpkg`。
+- 签名私钥在仓库外：`~/.navigator-ota/`（`root.secret` 离线保存；`release.secret`、`release.cert`、`update.secret` 用于发版）。**不要把任何 `.secret` 提交进仓库。**
+- GitHub Actions 的 `.github/workflows/ota.yml` 在推 `v*` tag 时用 nightly nsh 打包、签名并创建 Release。仓库需要三个 secret：`NSH_RELEASE_KEY`、`NSH_RELEASE_CERT`、`NSH_UPDATE_KEY`，内容分别是上面三个文件。
+- 不想用 CI 时，本地跑 `scripts/ota-release.sh --build 6 --notes CHANGES.md`，把 `dist/*.nshpkg`、`dist/latest.json`、`dist/latest.json.sig` 三个文件一起传到 GitHub Release（顺序：包先，manifest 和签名后）。
+- 每次发版都要把 `app/nsh.json` 的 `build` 加一；`version` 也一起改。App 只在包比当前 build 新时才装。
+- App 启动后 5 秒检查一次；手机在「连到 Mac」Sheet 里还有「检查更新」。Android/iOS 下载后**下次冷启动**运行，桌面可以按「重启」立刻运行。包第一次运行有 10 秒试用期，起不来会自动回退。
 
 ---
 
@@ -186,7 +214,8 @@ nsh 只认一个 `icon` 键（写对象会报 `invalid type: map`），所以 An
 - 逐字段合并与墓碑同样在真机上走过：Mac 改标题、手机同时点完成，合并后两端都是新标题且已完成；`rank` 重排从 Mac 传到手机；Mac 库里删掉的卡是保留 `title` / `status` / `rank` 的墓碑，不是丢行。
 - 自动发现：重装 APK、清空存储后启动，未输任何地址即找到 Mac（UDP 广播 + 源地址回读）。那次验证还没有配对码，所以它证明的是「发现」这一段；配对码之后的完整流程见上一条。
 - 多设备（两台 Mac + 一台手机）：实现是「每台 Mac 既服务又探测、Mac 之间直连互同步；手机只当客户端、但对发现的每一台 Mac 都同步」，水位、拒绝和补发都是按对端记的。Rust 侧用回环 socket 把 `exchange_loop` 打到真实的 `handle` 上跑过完整一轮（`the_exchange_thread_syncs_with_a_typed_peer`：typed 地址 → 鉴权 → 合并 → inbox → `status` 里的 peer）；**两台真实 Mac 同时在局域网里的收敛没有跑过**，本机只有一台 Mac，这一段只由单元测试与单机回环覆盖。配对码「一个看板一个码」（第二台 Mac 输入第一台的码）由 `Pairing.test.tsx` 覆盖。
-- 手机上手实测：捕获 Sheet（含「连续添加」、撤销提示不遮「添加」按钮）、详情页逐键编辑、备注里 URL 一行点开真的拉起浏览器、到期横幅在前台出现、示例数据清除入口，都在真机上走过一遍；行中部横滑翻页无误触，长按行操作 Sheet、列顶下拉刷新都不崩。窄条滑动在真机上修过一轮后实测：归档页尾端窄条左滑删除 10/10 与 5/5，待办页前端窄条右滑完成 5/5，行中部横滑翻页 3/3，待办页的尾端窄条横滑改为翻页（3/3，不再误归档）；窄条只在「没有页可翻」的那一页生效，其余页的边缘横滑是翻页，长按行操作 Sheet 是每页都能用的入口。修复后的 `Swipe.test.tsx` 在 macOS 与无头各 10/10，在真机上 10/10（锁屏时跑会全部失败，要先解锁并保持亮屏）。
+- 手机上手实测：捕获 Sheet（含「连续添加」、撤销提示不遮「添加」按钮）、详情页逐键编辑、备注里 URL 一行点开真的拉起浏览器、到期横幅在前台出现、示例数据清除入口，都在真机上走过一遍；行中部横滑翻页无误触，长按行操作 Sheet、列顶下拉刷新都不崩。卡片的左右滑动手势已移除：横向拖动只翻页，完成 / 归档 / 删除 / 打开都在长按 Sheet 与详情页里；`RowActions.test.tsx` 覆盖长按 Sheet 的 完成 / 归档 / 恢复 / 删除 与「横向拖动不操作卡片」，真机待复测。
+- Android 通知（API 35 模拟器 `navigator_api35`）：把截止设到今天 20:00 后，`dumpsys notification` 里出现 `tag=navigator.card.c3`、标题「到时间了：写周报」；点通知打开手机的卡片详情页；进程被 `kill -9` 后从通知冷启动，仍然打开同一张卡。真机尚未复测。
 - 手机竖向滚动 1224 帧掉帧 0.82%（p50 10ms / p90 12ms / p95 13ms / p99 14ms，Missed Vsync 0）。
 - 打包：`nsh package --target android` 出来的 APK 77.8 MB（debug 签名）。
 - 无头稳定性：一天里跑 8 次无头 `nsh test`，1 次在引擎退出阶段 SIGSEGV（栈 `js_free_value_rt` ← `reactive::free_all` ← `state::uninstall`），其余 7 次正常。只发生在退出阶段，不是 App 逻辑，没有尝试改引擎。
@@ -241,7 +270,7 @@ app/
   PhoneHome.tsx     手机端：分段控件、分页、记一笔、详情、长按行、筛选 Sheet
   FilterBar.tsx     Mac 的筛选条：日期组、标签条（放不下的进「更多」）、标签管理、清除、搜索
   strip.ts          筛选条要多少宽度才装得下（纯函数，先算再画）
-  palette.tsx       命令面板（Cmd+K）：新建、跳转、筛选、清空、提前提醒、导出导入、配对码
+  palette.tsx       命令面板（Cmd+K）：新建、跳转、筛选、清空、提前提醒、导出导入、配对码、检查更新
   PairDialog.tsx    配对码面板（Mac）：6 位数字与「重新生成」
   BackupTool.tsx    从备份恢复的列表
   data.ts           卡片、标签的模型与操作（墓碑、戳、rank、撤销提示、自动归档）
@@ -254,7 +283,8 @@ app/
   recurrence.ts     完成带重复的卡就在待办末尾生成下一次（启动一次 + 看板变化后的 effect，幂等）
   sync.ts           同步宿主/客户端：状态、轮询、配对码的存取
   pairing.ts        配对码的两端共用部分：只收数字、`482 913` 的写法、状态那句话
-  reminders.ts      截止提醒：Mac 排系统通知（含提前提醒与两个动作），手机用 App 内横幅
+  reminders.ts      截止提醒：Mac 排系统通知（含提前提醒与两个动作），手机在 App 打开时发系统通知，没有权限时用 App 内横幅
+  updates.ts        OTA：检查签名包、下载、手机下次冷启动 / 桌面重启后生效
   deadline.ts       截止与提前提醒的本机设置
   filters.ts        搜索、多标签、日期筛选（Mac 和手机共用同一份代码；筛选是本机状态，不跨设备同步）
   focus.ts          键盘光标：上下左右、换列、按行号继承
@@ -263,7 +293,7 @@ app/
   badge.ts          Dock 角标：逾期 + 今天到期且未完成
   panel.ts          面板尺寸与备注高度（纯数字，可单测）
   geom.ts           布局常量、看板几何（拖拽读的那份原点/尺寸）
-  theme.ts          两套配色、五种标签色相、字号、阴影、`onAccentWash()` / `onAccentFill()` / `onFill()`
+  theme.ts          两套配色、五种标签色相、字号、阴影、`onAccentWash()` / `onAccentFill()`
   checklist.ts      清单就是备注里的 `- [ ] ` 行：解析、勾选、追加、卡片上的预览
   text.ts           文字要占几行、备注里有哪些链接
   chrome.ts         头条两段：`titleSpacer()` + 38pt 自己的控制行

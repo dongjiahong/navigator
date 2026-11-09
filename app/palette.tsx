@@ -11,6 +11,7 @@ import {
   type DueCondition,
 } from "./filters";
 import { LEAD_CHOICES, leadMinutes, setLeadMinutes } from "./deadline";
+import { updateState } from "./updates";
 import { Icon, IconButton, clearArchive, clearSamples, managingTags } from "./ui";
 import { hueColor, theme, type Hue } from "./theme";
 
@@ -40,7 +41,8 @@ export type CommandKind =
   | "export-markdown"
   | "import"
   | "restore"
-  | "pair";
+  | "pair"
+  | "update";
 
 export type Command = {
   /** Stable within one open palette, and the row's test id. */
@@ -209,6 +211,11 @@ export function rankCommands(
 
   offer({ id: "unfilter", kind: "unfilter", label: "清除筛选", hint: "全部" }, "清除筛选 全部 显示所有", 60);
 
+  // OTA: a package of the app's code, downloaded now and run from the next
+  // start (or after a restart on the desktop). It sits under the everyday verbs
+  // because it is housekeeping, not work.
+  offer({ id: "update", kind: "update", label: "检查更新" }, "检查更新 更新 升级 update ota", 30);
+
   // The Mac's only setting: there is no settings page, and a lead time is one
   // number, so it is one row per value in the field that already reaches every
   // verb. The lead in use says so on its own row rather than in a status line.
@@ -294,9 +301,30 @@ export function closePalette(): void {
   paletteOpen.set(false);
 }
 
+/** The update row says what the press will do, not always 检查更新. */
+function updateRowLabel(): string {
+  switch (updateState()) {
+    case "ready":
+      return "重启以应用更新";
+    case "checking":
+    case "downloading":
+      return "正在检查更新…";
+    case "failed":
+      return "检查更新（上次失败）";
+    case "current":
+      return "检查更新（已是最新）";
+    case "unsupported":
+      return "更新不可用";
+    default:
+      return "检查更新";
+  }
+}
+
 /** The rows for what is typed right now. */
 function results(): Command[] {
-  return rankCommands(query(), cards(), boardTags());
+  return rankCommands(query(), cards(), boardTags()).map((row) =>
+    row.kind === "update" ? { ...row, label: updateRowLabel() } : row,
+  );
 }
 
 /**
@@ -329,6 +357,7 @@ export function CommandPalette(props: {
   onImport: () => void;
   onRestore: () => void;
   onPair: () => void;
+  onUpdate: () => void;
 }) {
   /** Runs the row `id` names, and closes. */
   const run = (id: string) => {
@@ -384,6 +413,9 @@ export function CommandPalette(props: {
         break;
       case "pair":
         props.onPair();
+        break;
+      case "update":
+        props.onUpdate();
         break;
     }
   };

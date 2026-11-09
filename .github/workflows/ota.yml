@@ -1,0 +1,70 @@
+name: OTA release
+
+# A tag publishes the app's TSX as a signed package. The installed APK keeps
+# its runtime; every OTA after it is code, images and fonts only.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  ota:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nsh nightly
+        run: |
+          mkdir -p "$RUNNER_TEMP/nsh"
+          curl -fsSL \
+            https://github.com/longbridge/nsh/releases/download/nightly/nsh-macos-arm64.tar.gz \
+            -o "$RUNNER_TEMP/nsh.tar.gz"
+          tar -xzf "$RUNNER_TEMP/nsh.tar.gz" -C "$RUNNER_TEMP/nsh"
+          echo "$RUNNER_TEMP/nsh/nsh/bin" >> "$GITHUB_PATH"
+
+      - name: Write the signing keys
+        env:
+          RELEASE_KEY: ${{ secrets.NSH_RELEASE_KEY }}
+          RELEASE_CERT: ${{ secrets.NSH_RELEASE_CERT }}
+          UPDATE_KEY: ${{ secrets.NSH_UPDATE_KEY }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/keys"
+          chmod 700 "$RUNNER_TEMP/keys"
+          printf '%s\n' "$RELEASE_KEY" > "$RUNNER_TEMP/keys/release.secret"
+          printf '%s\n' "$RELEASE_CERT" > "$RUNNER_TEMP/keys/release.cert"
+          printf '%s\n' "$UPDATE_KEY" > "$RUNNER_TEMP/keys/update.secret"
+
+      - name: Publish the package and the manifest
+        run: |
+          mkdir -p dist
+          VERSION="$(jq -r .version app/nsh.json)"
+          BUILD="$(jq -r .build app/nsh.json)"
+          PACKAGE="dist/$(jq -r .id app/nsh.json)-${BUILD}.nshpkg"
+          if [ -f CHANGES.md ]; then
+            NOTES=CHANGES.md
+          else
+            printf 'Navigator %s (build %s)\n' "$VERSION" "$BUILD" > "$RUNNER_TEMP/notes.md"
+            NOTES="$RUNNER_TEMP/notes.md"
+          fi
+          nsh publish app \
+            --key "$RUNNER_TEMP/keys/release.secret" \
+            --cert "$RUNNER_TEMP/keys/release.cert" \
+            -o "$PACKAGE"
+          nsh update-manifest \
+            --entry app \
+            --package "$PACKAGE" \
+            --notes "$NOTES" \
+            --key "$RUNNER_TEMP/keys/update.secret" \
+            -o dist
+          echo "PACKAGE=$PACKAGE" >> "$GITHUB_ENV"
+          echo "NOTES=$NOTES" >> "$GITHUB_ENV"
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "$PACKAGE" dist/latest.json dist/latest.json.sig \
+            --notes-file "$NOTES"

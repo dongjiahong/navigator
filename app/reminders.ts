@@ -1,4 +1,4 @@
-import { effect, platform, signal } from "nsh";
+import { Notifications, effect, platform, signal } from "nsh";
 import { Reminder } from "app/native";
 import { board, epochOf, patchCard, remindsAt, setStatus } from "./data";
 import {
@@ -14,26 +14,28 @@ import {
 /**
  * Deadlines that leave the app.
  *
- * nsh has no notification API, so the Mac's reminders go through the system's
- * notification centre from the crate (`Reminder`): a scheduled reminder is a
- * real notification, with the sound the user picked for the app in System
- * Settings, that macOS delivers even after Navigator quits.
+ * The Mac's reminders go through the system's notification centre from the
+ * crate (`Reminder`): a scheduled reminder is a real notification, with the
+ * sound the user picked for the app in System Settings, that macOS delivers
+ * even after Navigator quits.
  *
- * The phone cannot post one. Android 13 and newer only let an app notify if its
- * manifest asks for `POST_NOTIFICATIONS`, and `nsh package` writes that manifest
- * with `INTERNET` alone and has no way to add to it — so `Reminder.status()` is
- * `unsupported` there, and this module reminds from inside the app instead,
- * with a banner while it is open. Pretending otherwise would be a notification
- * the system silently drops.
+ * The phone can now post a notification too (`Notifications` of nsh's main),
+ * but only while the app is running: the API shows one now, and nsh still has
+ * no way to wake the app at a deadline. So the phone keeps a due card in the
+ * app's own loop and hands it to the system when the permission is granted;
+ * where the permission is denied or the platform cannot show one, the same
+ * loop puts a line over the list instead. A notification the user presses
+ * comes back through `Notifications.on("press")` and opens its card.
  *
  * What a deadline *asks* is decided in `deadline.ts`: which reminders a card
  * wants, what the lead time is, and what a notification's two buttons mean. This
  * module is the half that touches the system, so the decisions can be read by a
  * test without a notification centre to talk to.
  *
- * Everything here is Mac-only in effect, and Mac-only in what it keeps: the lead
- * time is one number the user sets for themselves, and 完成 / 推迟 1 小时 answer a
- * notification. None of it is a field on a card, so none of it syncs.
+ * Everything here is Mac-only in effect for the scheduled reminders, and
+ * Mac-only in what it keeps: the lead time is one number the user sets for
+ * themselves, and 完成 / 推迟 1 小时 answer a notification. None of it is a
+ * field on a card, so none of it syncs.
  */
 
 export type ReminderState = "unknown" | "granted" | "denied" | "unsupported";
@@ -49,12 +51,31 @@ const ANSWER_MS = 1000;
 
 /** The card the banner is about, or `null`. */
 export const dueNow = signal<{ id: string; title: string } | null>(null);
-/** Cards dismissed for this run, so a banner does not come back on every tick. */
+/**
+ * Cards whose due reminder was handled for this run: dismissed from the
+ * banner, or already shown as a system notification. Either way one card
+ * speaks once per launch.
+ */
 const dismissed = new Set<string>();
 
-/** Whether reminders go through the system or only show inside the app. */
+/** The prefix the system knows a reminder by, before its card id. */
+const PREFIX = "navigator.card.";
+
+/**
+ * The card a notification asked to have opened. The answer arrives in the
+ * crate (Mac) or in `Notifications` (the phone), but the open card is the
+ * shell's own state (`App.tsx` owns `selectedId`), so the request is left in
+ * this signal for it to take.
+ */
+export const openRequested = signal<string | null>(null);
+
+/**
+ * Whether the Mac's notification centre owns the schedule. The phone's
+ * `Notifications` only shows one now, so its due cards still go through the
+ * app's own loop and the banner decision in `checkDue`.
+ */
 export function systemReminders(): boolean {
-  return reminderState() === "granted";
+  return platform.os === "macos" && reminderState() === "granted";
 }
 
 /**
@@ -65,7 +86,29 @@ export function systemReminders(): boolean {
  */
 export async function askForReminders(): Promise<void> {
   if (platform.os === "android") {
-    reminderState.set(Reminder.status() as ReminderState);
+    try {
+      let permission = await Notifications.permission();
+      if (permission === "default") permission = await Notifications.requestPermission();
+      reminderState.set(
+        permission === "granted"
+          ? "granted"
+          : permission === "denied" || permission === "default"
+            ? // A prompt that was dismissed is not an answer the app can wait on
+              // again: the banner is the fallback, and the sheet's 测试 re-reads
+              // the system after the user changes it.
+              "denied"
+            : permission === "unavailable"
+              ? "unsupported"
+              : "unknown",
+      );
+    } catch {
+      // No notification capability, or a host without a notification centre:
+      // the banner remains the phone's reminder.
+      reminderState.set("unsupported");
+    }
+    // The first check waited for this answer; a card that came due while the
+    // prompt was up gets its notification now.
+    checkDue();
     return;
   }
   const asked = Reminder.request() as string;
@@ -86,6 +129,42 @@ export async function askForReminders(): Promise<void> {
   }
 }
 
+/** One line for the phone's 连到 Mac sheet: what the notification permission is. */
+export function notificationLine(): string {
+  switch (reminderState()) {
+    case "granted":
+      return "已允许，到点会在系统通知里提醒";
+    case "denied":
+      return "未允许。请在系统设置里打开通知";
+    case "unsupported":
+      return "此安装包不能发通知，需要 1.2.0 新包";
+    default:
+      return "尚未检查";
+  }
+}
+
+/**
+ * Posts one notification now, so the permission and the channel can be tested
+ * without waiting for a deadline. It is also the first place the channel is
+ * created: an Android app with no channel can leave its notification settings
+ * looking empty even when the permission is declared.
+ */
+export async function testNotification(): Promise<void> {
+  if (platform.os !== "android") return;
+  if (reminderState() !== "granted") await askForReminders();
+  if (reminderState() !== "granted") return;
+  try {
+    const taken = await Notifications.show({
+      id: "navigator.test",
+      title: "通知测试",
+      body: "Navigator 可以发系统通知了。",
+    });
+    if (!taken) reminderState.set("denied");
+  } catch {
+    reminderState.set("unsupported");
+  }
+}
+
 /**
  * Takes the notification centre's delegate and registers the reminder's
  * category, before anything asks for permission.
@@ -97,6 +176,23 @@ export async function askForReminders(): Promise<void> {
  * registered comes with no actions.
  */
 export function installReminders(): void {
+  if (platform.os === "android") {
+    try {
+      // A press can be what launched the app; the module keeps it until this
+      // listener is here. The id carries the card, so the shell can open it.
+      Notifications.on("press", ({ id }) => {
+        if (!id.startsWith(PREFIX)) return;
+        const cardId = id.slice(PREFIX.length);
+        dismissed.add(cardId);
+        if (dueNow()?.id === cardId) dueNow.set(null);
+        openRequested.set(cardId);
+      });
+      console.log("[navigator] reminders: Android notifications while the app is open");
+    } catch (error) {
+      console.log(`[navigator] reminders: ${error}`);
+    }
+    return;
+  }
   let installed = "unsupported";
   try {
     installed = Reminder.install() as string;
@@ -136,7 +232,7 @@ let plannedLead = leadMinutes();
  * early one back without touching the deadline's.
  */
 export function syncReminders(): void {
-  if (reminderState() !== "granted") return;
+  if (!systemReminders()) return;
   const now = Date.now();
   const lead = leadMinutes();
   /** Every slot the board wants, before the shared moments are spread out. */
@@ -200,10 +296,15 @@ export function syncReminders(): void {
 
 /**
  * The phone's reminder: a deadline that came due in the last few minutes, while
- * the app is open, put in one banner. Dismissing it holds for the run.
+ * the app is open. With the notification permission it becomes a system
+ * notification; otherwise it is one line over the list. Either way a card
+ * speaks once per run.
  */
 function checkDue() {
   if (systemReminders()) return;
+  // The phone's answer is asynchronous: do not put a line up before the
+  // permission says whether the system can show the card instead.
+  if (platform.os === "android" && reminderState() === "unknown") return;
   const now = Date.now();
   for (const card of board()) {
     if (card.deleted || !card.due) continue;
@@ -213,7 +314,30 @@ function checkDue() {
     if (dismissed.has(card.id)) continue;
     const shown = dueNow();
     if (shown?.id === card.id) continue;
-    dueNow.set({ id: card.id, title: card.title || "未命名卡片" });
+    const title = card.title || "未命名卡片";
+    if (platform.os === "android" && reminderState() === "granted") {
+      dismissed.add(card.id);
+      void Notifications.show({
+        id: `${PREFIX}${card.id}`,
+        title: `到时间了：${title}`,
+        body: (card.notes.trim() || "截止时间到了").slice(0, 120),
+      })
+        .then((taken) => {
+          if (taken) return;
+          // The permission went away between the read and the show: put the
+          // line up instead and stop pretending the system will speak.
+          reminderState.set("denied");
+          dismissed.delete(card.id);
+          dueNow.set({ id: card.id, title });
+        })
+        .catch(() => {
+          reminderState.set("unsupported");
+          dismissed.delete(card.id);
+          dueNow.set({ id: card.id, title });
+        });
+      return;
+    }
+    dueNow.set({ id: card.id, title });
     return;
   }
 }
@@ -223,13 +347,6 @@ export function dismissDue(): void {
   if (shown) dismissed.add(shown.id);
   dueNow.set(null);
 }
-
-/**
- * The card a notification asked to have opened. The answer arrives in the crate
- * and is picked up here, but the open card is the shell's own state (`App.tsx`
- * owns `selectedId`), so the request is left in this signal for it to take.
- */
-export const openRequested = signal<string | null>(null);
 
 /** Applies one answer to the board. */
 function handleResponse(answer: Response): void {
@@ -268,9 +385,6 @@ function takeResponses(): void {
   for (const answer of answers as Response[]) handleResponse(answer);
 }
 
-/** The prefix the system knows a reminder by, before its card id. */
-const PREFIX = "navigator.card.";
-
 /**
  * The ids the system holds, or `null` while its answer is still on its way.
  *
@@ -302,7 +416,7 @@ async function heldIds(): Promise<string[] | null> {
  * `<id>.pre`, so a caller can tell the two apart.
  */
 export async function pendingReminders(): Promise<string[]> {
-  if (reminderState() !== "granted") return [];
+  if (!systemReminders()) return [];
   return (await heldIds()) ?? [];
 }
 
@@ -390,7 +504,9 @@ export function startReminders(): void {
     await reconcile();
   })();
   checkDue();
-  takeResponses();
+  // The Mac's notification answers are polled; the phone's arrive through
+  // `Notifications.on` instead, registered in `installReminders`.
+  if (platform.os !== "android") takeResponses();
   setInterval(() => {
     syncReminders();
     checkDue();
@@ -413,6 +529,6 @@ export function startReminders(): void {
   // Answers are polled more often than the board is looked at: a notification is
   // the one thing that happens while the app is behind another window, and a
   // press on 完成 should read as a press, not as something that happened
-  // eventually. The phone has no notification to answer.
+  // eventually. The phone's press arrives through the listener instead.
   if (platform.os !== "android") setInterval(takeResponses, ANSWER_MS);
 }

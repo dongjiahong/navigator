@@ -124,8 +124,7 @@ because the Mac is used for long stretches and the cool ground tires the eye
 less. Colour is a strict budget of three jobs: a tag dot says what the work
 belongs to, a due time turns amber today and red when it is late, and a finished
 card drops to tertiary ink behind a green check. Nothing else in the interface is
-allowed to be colourful — not the selection, not a header, not a count — with one
-controlled exception, the band a phone row uncovers when it is swiped.
+allowed to be colourful — not the selection, not a header, not a count.
 
 The phone is the same material at a different size. A column becomes a single
 sheet of paper with rows divided by inset hairlines; a card's circle leads the row
@@ -203,14 +202,10 @@ life a card belongs to (a 6px tag dot), it says whether a due time needs attenti
 now (amber today, red late), and it marks work as finished (a green check). Any
 other colour anywhere on the board is a bug.
 
-**The Swipe Band Exception.** The one place colour may be a *fill* is the band a
-phone row uncovers when it is swiped: `ok` behind 完成 / 恢复, `danger` behind
-删除, and the neutral `select` behind 归档, which is a move and not news. They are
-the board's own three jobs at full strength, they exist only while the finger is
-on the row, and their content goes through `onFill()` — white in light (5.29:1 on
-green, 5.93:1 on red), near-black in dark (9.16:1 and 7.75:1) — while the neutral
-band takes `textSecondary` (5.40:1 light, 6.29:1 dark). A filled colour anywhere
-outside a swipe band is still a bug.
+**The No Filled Surface Rule.** Colour never becomes a surface: green, red and
+amber are words about work, never a background for a row, a button or a band. The
+phone's primary button and FAB are the accent's one filled moment; everything
+else that carries colour is a dot, a label, a check or a wash.
 
 **The One Accent Rule.** The accent appears on a button, a selected chip, the drop
 seam, and the phone's FAB — together under 2% of the pixels. Its rarity is what
@@ -275,15 +270,15 @@ needs emphasis, the card is in the wrong column.
 
 A header band carrying 领航, the sync state, the 配对码 link and one 新建 button,
 closed by a hairline. **It is the window's title bar**, not an app header inside a
-titled window: the system chrome is hidden (`Window.setTitleBar({ style: "hidden",
-height })`), the app fills the window to its top edge, and the traffic lights sit
-on the app's own ground. The band is draggable as a title bar.
+titled window: the system chrome is hidden (`currentWindow().set({ titleBar: {
+style: "hidden", height } })`), the app fills the window to its top edge, and the
+traffic lights sit on the app's own ground. The band is draggable as a title bar.
 
 It is drawn in two parts, because AppKit keeps a strip at the top for dragging and
 **a press in that strip never reaches the app** — a button drawn there is visible
 and dead. So the ground runs under the lights with no seam, `titleSpacer()` gives
 the platform its strip, and the app's own 38pt row of controls sits immediately
-below it; `headerHeight()` adds the two and is also what `setTitleBar` is given.
+below it; `headerHeight()` adds the two and is also what the title bar setting is given.
 A band of system chrome above the board is what makes a native app look like a web
 page in a browser.
 
@@ -510,15 +505,17 @@ because the date moved, not because something else did.
 
 The deadline is edited in two parts. Three chips set the *day* (今天 / 明天 / 下周)
 and keep the time already on the card, so 明天 on a 14:30 deadline means tomorrow
-at 14:30 rather than tomorrow at 09:00. A `TimeField` beside them sets the hour and
-minute, standing on the time in use before the first press. A 清除 next to the
-chips takes the deadline away, and a day chip opens a month for any date at all.
+at 14:30 rather than tomorrow at 09:00. A time chip beside them opens the app's
+own picker: two grids, the 24 hours and the five-minute steps, with 现在 for the
+clock's exact minute. The chip shows the time in use before the first press. A
+清除 next to the chips takes the deadline away, and a day chip opens a month for
+any date at all.
 
 The month is a `Calendar` on a panel the app owns, not a `DatePicker` popup: a
 picker's popup draws as a transparent layer on this engine and the card shows
-through the days. The calendar carries the hour on a strip under it, so a date is
-one decision rather than a date followed by a hunt for the field that sets when,
-and a picked day keeps the time the card already had.
+through the days. The calendar carries the same time chip on a strip under it, so
+a date and a time are two visible decisions rather than a date followed by a hunt
+for a text field, and a picked day keeps the time the card already had.
 
 **A repeat is one press, not a menu.** The deadline row ends with one chip whose
 label walks 不重复 → 每天 → 每周 → 每月 → 每年 on each press, the way a tag's hue
@@ -550,11 +547,15 @@ with the app closed, plays the sound chosen in System Settings, and lists beside
 every other app's. Only open work with a deadline still ahead is scheduled — a
 finished card, a removed card and a date in the past all drop their reminder, and
 an overdue card says 已逾期 on the board instead of pushing a notification about
-a moment that has already gone. On the phone no system notification can be
-posted at all (the manifest `nsh package` writes has no `POST_NOTIFICATIONS`), so
-a deadline that comes due while the app is open puts one line above the list:
-amber glyph, 到时间了, the card's title, 打开 and a dismiss. It is a banner the app
-draws, and it is honest about being one.
+a moment that has already gone. On the phone nsh's `Notifications` posts a real
+system notification while the app is running: a card that comes due within the
+app's five-minute window is handed to the system under `navigator.card.<id>`,
+and pressing it opens the card on the phone's sheet. Where the permission is
+denied, or the platform cannot show one, the same window puts one line above the
+list instead: amber glyph, 到时间了, the card's title, 打开 and a dismiss. The
+phone still cannot wake itself: nsh has no scheduled notification or alarm, so a
+deadline that passes while Navigator is closed is seen on the next launch, not
+announced at its hour.
 
 **One banner at a time is all the system shows.** Cards due at the same minute are
 each handed over, and the system replaces the banner in front of the eye with the
@@ -640,31 +641,14 @@ One sheet per column, rows divided by a hairline inset 47px on the left so it
 starts where the text does. A 44pt check circle leads the row, then title, then one
 line of notes, then tag dots and a due pill.
 
-**The Held Row Rule.** A swipe lives at the row's edges, and a hold is the way that
-always works. A right swipe is 完成 (恢复 on a finished row), a left swipe is 归档,
-and in 归档 it is 删除 — the meanings the board already has, in the fills The Swipe
-Band Exception allows. The horizontal drag is on a narrow strip at each end of the
-row (46pt leading everywhere; the 56pt trailing one exists only on 归档, with no mark drawn on it) rather than the whole row, because the rows sit
-inside the pager that is the four columns and a pan that activates takes the touch
-away from every scroll view around it for good: a full-width swipe would cost the
-page turn. **Each strip acts only on the page where the pager has nowhere to go** —
-the leading one on 待办 (nothing to its left), the trailing one on 归档 (nothing to
-its right). Measured on a real Android phone, an edge pan wins the touch against
-the pager on *every* page, so a strip left armed in the middle columns archived a
-card where the finger meant to turn the page; everywhere else the same edge drag is
-the page turn. A **long press** is the row's way in on every page — a sheet with the
-same two writes plus 打开 — since a gesture that only ever existed as a swipe would
-leave most columns without one.
+**The Held Row Rule.** A hold is the row's way in. A held row opens a sheet with
+完成 / 恢复, 归档 / 删除 and 打开; the check circle stays the fast path for 完成,
+and the detail sheet carries the same writes for a card opened by a tap.
 
-Three more numbers come from that device. The trailing strip keeps **24pt from the
-screen's right edge**: a row's own 16pt margin is inside the system's ~20pt
-back-gesture zone, where a touch never reaches the app at all, and the mark moves
-with the target (padding would leave a handle drawn where it cannot be pressed). A
-strip is **at least 44pt wide**, which is also what the platform's own pointer
-driver needs to aim at it. And the end of a swipe is **ignored by the row it lands
-on**: by then that row is a different card, and a press there opened a sheet naming
-a card the finger never touched. While a swipe is under way its row's long-press
-timer is off, so the swipe and the sheet never both fire.
+**A row has no swipe.** The rows sit inside the pager that is the four columns, so
+a horizontal drag is the page turn; a pan on the row would take that touch away
+from every scroll view around it for good. The hold works on every page, which is
+what makes 归档 and 删除 reachable without a gesture the pager has to lose.
 
 ### Phone sheets
 
@@ -971,8 +955,8 @@ waited out in full.
 - **Don't** paint selection in the accent; select with paper pressed into the desk.
 - **Don't** put a dialog in front of a single delete. The tombstone makes it
   reversible, and a question asked before every press is a tax on every press.
-- **Don't** fill a surface with colour outside a swipe band: green, red and amber
-  are words about work, not backgrounds for a button.
+- **Don't** fill a surface with colour: green, red and amber are words about
+  work, not backgrounds for a button or a row.
 - **Don't** let the search field be what gives when the filter row runs out of
   width — move a tag behind 更多, never the field.
 - **Don't** offer 撤销 from a sheet that covers the line it would be drawn on; give

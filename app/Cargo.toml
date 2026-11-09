@@ -7,8 +7,10 @@ publish = false
 [workspace]
 
 [dependencies]
-nsh-core = "0.4.0"
-nsh-base = "0.4.0"
+# The notification API (`Notifications`) is on nsh's main, after 0.4.0.
+# Pin one commit so the app and the hosts the CLI generates build one core.
+nsh-core = { git = "https://github.com/longbridge/nsh", rev = "36b91689c1e7c38379179a56381de7ddab16c6a5" }
+nsh-base = { git = "https://github.com/longbridge/nsh", rev = "36b91689c1e7c38379179a56381de7ddab16c6a5" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The interface list, for the broadcast addresses the phone probes.
@@ -23,9 +25,10 @@ sha2 = "0.11.1"
 hmac = "0.13.0"
 subtle = "2.6.1"
 
-# Deadline reminders. nsh has no notification API, so the Mac's go through the
-# system's own notification centre here: it owns the schedule, delivers while
-# the app is closed, and plays the sound chosen in System Settings.
+# Deadline reminders. The Mac's scheduled reminders go through the system's own
+# notification centre here: it owns the schedule, delivers while the app is
+# closed, and plays the sound chosen in System Settings. nsh's `Notifications`
+# only shows one now, so the phone's due-now notification lives in `reminders.ts`.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6.5", features = ["exception"] }
 objc2-foundation = { version = "0.3.2", features = ["std", "NSString", "NSArray", "NSSet", "NSError", "NSBundle"] }

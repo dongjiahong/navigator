@@ -78,16 +78,21 @@ test("a deadline keeps its time when its day changes", async () => {
   expect(app.shows("text:明天 20:00")).toBe(true);
 });
 
-test("the time of day is editable on the card", async () => {
+test("the time of day is picked on the card", async () => {
   const { app, desktop } = await openApp();
   if (!desktop) return;
 
   await app.press("id:card-c3");
   await app.waitFor("id:inspector-title");
-  // The field stands on the time in use, so a deadline has one control for the
-  // part the three day shortcuts cannot set.
-  expect(app.texts()).toContain("20");
-  expect(app.texts()).toContain("00");
+  // The chip stands on the time in use, and opens the same grid the phone uses.
+  expect(app.texts().some((t) => t.endsWith("20:00"))).toBe(true);
+  await app.press("id:due-time");
+  await app.waitFor("id:due-time-dialog");
+  await app.press("label:21 时");
+  await app.press("label:30 分");
+  await app.press("id:due-time-done");
+  await app.wait(300);
+  expect(app.texts().some((t) => t.endsWith("21:30"))).toBe(true);
 });
 
 test("deleting a card asks nothing and offers it back instead", async () => {

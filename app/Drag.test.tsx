@@ -50,6 +50,30 @@ test("a card drags from its body", async () => {
   expect(app.shows("id:col-todo >> id:card-c3")).toBe(false);
 });
 
+/**
+ * A deletion must not leave the cards below it undraggable.
+ *
+ * The list recycles a cell by changing the item its accessor reads, not by
+ * remounting the card. The drag responder used to be cached by card id at
+ * mount, so the card that moved into the deleted one's cell still dragged the
+ * deleted id, and the gesture did nothing.
+ */
+test("a card that moves up after a deletion still drags", async () => {
+  const { app, desktop } = await openApp();
+  if (!desktop) return;
+
+  // c2 is above c3 in 待办.
+  await app.press("id:card-c2");
+  await app.waitFor("id:inspector-title");
+  await app.press("label:删除卡片");
+  await app.wait(400);
+  expect(app.shows("id:col-todo >> id:card-c2")).toBe(false);
+
+  await app.drag("id:card-c3", { x: 300, y: 40 });
+  expect(app.shows("id:col-doing >> id:card-c3")).toBe(true);
+  expect(app.shows("id:col-todo >> id:card-c3")).toBe(false);
+});
+
 test("a press on the card body opens it and moves nothing", async () => {
   const { app, desktop } = await openApp();
   if (!desktop) return;

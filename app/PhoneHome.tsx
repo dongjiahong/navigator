@@ -1,14 +1,11 @@
 import {
   List,
-  PanResponder,
   Scroll,
   Storage,
   Text,
   View,
-  createAnimatedValue,
   signal,
   windowSize,
-  type AnimatedValue,
   type InputRef,
   type ScrollRef,
 } from "nsh";
@@ -64,8 +61,9 @@ import {
   clearSamples,
 } from "./ui";
 import { fieldHeight } from "./text";
-import { hueColor, onFill, theme, onAccentFill, onAccentWash, TYPE } from "./theme";
-import { dismissDue, dueNow } from "./reminders";
+import { hueColor, theme, onAccentFill, onAccentWash, TYPE } from "./theme";
+import { dismissDue, dueNow, notificationLine, testNotification } from "./reminders";
+import { takeUpdateAction, updateActionLabel, updateLine, updateState } from "./updates";
 import { connectTo, detail, endpoint, pairLine, pairWith, peers, phase, start, statusLine, syncNow } from "./sync";
 import { canPair, digits, pairCode, peerLine } from "./pairing";
 
@@ -82,7 +80,7 @@ const shownId = signal<string | null>(null);
 let pages: ScrollRef | undefined;
 
 /** Opens `id` in the detail sheet. */
-function openCard(id: string) {
+export function openCard(id: string) {
   shownId.set(id);
   openId.set(id);
 }
@@ -143,215 +141,45 @@ function todayLine() {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${wd}`;
 }
 
-/** What one swipe does: the words and colour of the band, and the write. */
+/** What one row write is: its word, its glyph, and the write. */
 type RowAction = {
   label: string;
   icon: "check" | "archive" | "close";
-  /** The band's fill, and what is drawn on it. */
-  fill: string;
-  ink: string;
   run: (id: string) => void;
 };
 
 /**
  * The two actions a row carries, by direction, for `status`.
  *
- * They are the meanings the app already has, not new ones: a right swipe is the
- * check circle (完成, or 恢复到待办 on a row that is already finished), a left
- * swipe is 归档, and in 归档 it is the 删除 that column exists for. The colours
- * are the board's three existing jobs — green is finished work, red is the
- * destructive press, and the neutral pressed paper is a move that is not news.
- * A swipe writes through `setStatus` / `removeWithUndo`, so it offers a way back
- * in the same line every other write does.
+ * They are the meanings the app already has, not new ones: right is the check
+ * circle's meaning (完成, or 恢复到待办 on a row that is already finished), left
+ * is 归档, and in 归档 it is the 删除 that column exists for. Both write through
+ * `setStatus` / `removeWithUndo`, so both offer a way back in the same line every
+ * other write does.
  */
 function rowActions(status: Status): { right: RowAction; left: RowAction } {
   const settled = status === "done" || status === "archive";
   return {
     right: settled
-      ? { label: "恢复", icon: "check", fill: theme().ok, ink: onFill(), run: (id) => setStatus(id, "todo") }
-      : { label: "完成", icon: "check", fill: theme().ok, ink: onFill(), run: (id) => setStatus(id, "done") },
+      ? { label: "恢复", icon: "check", run: (id) => setStatus(id, "todo") }
+      : { label: "完成", icon: "check", run: (id) => setStatus(id, "done") },
     left:
       status === "archive"
-        ? { label: "删除", icon: "close", fill: theme().danger, ink: onFill(), run: (id) => removeWithUndo(id) }
-        : {
-            label: "归档",
-            icon: "archive",
-            fill: theme().select,
-            ink: theme().textSecondary,
-            run: (id) => setStatus(id, "archive"),
-          },
+        ? { label: "删除", icon: "close", run: (id) => removeWithUndo(id) }
+        : { label: "归档", icon: "archive", run: (id) => setStatus(id, "archive") },
   };
-}
-
-/** How wide a row is: the sheet, less the page's two 16-point margins. */
-function rowWidth(): number {
-  return Math.max(120, windowSize().width - 32);
-}
-
-/**
- * How far a row must travel before its action fires: a third of the row, and
- * never less than 64 points, so a stray sideways move while scrolling is not an
- * archive.
- */
-function swipeReach(): number {
-  return Math.max(64, Math.round(rowWidth() * 0.3));
-}
-
-/**
- * What one row's swipe means to the drawing.
- *
- * The visual is a native animated value, not a signal: the responder writes the
- * value and the row's `translate` is bound to it, so the row follows the finger
- * without a re-render per move (a re-render would rebuild every cell of the
- * column and drop the gesture — the board's own drag has the same rule).
- *
- * **A horizontal drag can only ever be the row's where the pager has nowhere to
- * go, and the handles are placed for that.** The rows live inside the paged
- * scroll that is the four columns, and a paged scroll keeps the horizontal drags
- * that still have a page to travel to; a pan that activates takes the touch away
- * from the scroll views around it for good. Measured on a real macOS host:
- *
- * - a right swipe on 待办 (no page to the left) reached the row and completed
- *   the card;
- * - a left swipe on 归档 (the last page, nothing to the right) reached the row
- *   and deleted the card;
- * - a left swipe on 待办 was the pager's, and the list moved to 进行中.
- *
- * So the gesture is a fast path where the board has nothing to page to, and the
- * **held row** (`onLongPress` in `PhoneRow`) is the one that always arrives:
- * 完成 / 归档 / 删除 / 打开 in a sheet, on every page. The strips at the row's
- * two edges are where the drags are offered, and they are deliberately narrow —
- * if a sparser scroll view were ever to give this app the drags, the middle of
- * the row is still the pager's.
- *
- * **A handle under 44 points is a handle a thumb has to hunt for.** The leading
- * strip holds the check circle and is 46; the trailing one is 56 rather than the
- * 34 a bare mark would need, so that a left swipe starts on a target the
- * platform would call one. The row is 358 points wide at 390, so the pager still
- * owns 256 of them — the strips grew, the body did not shrink into a handle.
- * `app.drag` is why the number matters to a test as well: it brings the named
- * view "well inside" every scroll view around it first, and a point within a
- * tenth of the pager's edge (39 of a 390-point page) sends it paging, which never
- * converges on a paged scroll — a 34-point trailing strip sat 33 points from the
- * edge and could not be dragged by a test at all.
- */
-const rowDrags = new Map<string, AnimatedValue>();
-const rowPans = new Map<string, ReturnType<typeof PanResponder.create>>();
-
-/**
- * The cards whose edge strip holds the touch right now.
- *
- * A swipe of an edge and a hold on the row are the same finger down on the same
- * row, and the hold's timer does not stop when the strip's pan claims the touch:
- * measured on a real Android device, a 420 ms-and-change swipe opened the row's
- * sheet *while* it travelled, so a slow swipe deleted the card and left the sheet
- * of the card it had just deleted over the board. The pan announces itself here
- * on grant and leaves on release or terminate, and the hold asks before it opens
- * anything.
- */
-const rowSwipes = new Set<string>();
-
-/**
- * When an edge strip last let go of a touch.
- *
- * The end of a swipe arrives twice: the strip's pan releases, and the row under
- * the finger hears a press. By then that row is a different card — the swipe
- * just moved or deleted the one that was there, and the next one took its place.
- * Measured on a real Android device: a left swipe in 归档 deleted the card and
- * opened the detail sheet of the card that had moved up into its place, so the
- * sheet named a card the finger never touched. A press within a moment of a
- * strip's release is that same finger finishing its swipe, not a tap on the row
- * now beneath it.
- */
-const SWIPE_PRESS_MS = 300;
-let swipedAt = 0;
-
-/** Whether a strip let go of a touch so recently that a press is its tail. */
-function wasJustSwiped(): boolean {
-  return Date.now() - swipedAt < SWIPE_PRESS_MS;
-}
-
-/** The row's travel, one value per card so both handles move the same row. */
-function dragOf(id: string): AnimatedValue {
-  const found = rowDrags.get(id);
-  if (found) return found;
-  const made = createAnimatedValue(0);
-  rowDrags.set(id, made);
-  return made;
-}
-
-/**
- * The swipe at one edge of card `id`'s row.
- *
- * Cached by card and edge, the way the Mac's cards are: a responder remade while
- * the finger is down stops hearing its own moves, and a row is re-rendered
- * whenever its card changes — which is what the end of a swipe does.
- */
-function swipeFor(id: string, edge: "lead" | "trail"): ReturnType<typeof PanResponder.create> {
-  const key = `${edge}:${id}`;
-  const cached = rowPans.get(key);
-  if (cached) return cached;
-  const dx = dragOf(id);
-  const back = (velocity = 0) => dx.spring(0, { velocity });
-  const pan = PanResponder.create({
-    // A press that never moves is a press: it opens the card, which is what the
-    // row is for. The swipe claims the touch only once it is a swipe.
-    onStartShouldSetPanResponder: () => false,
-    onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: () => {
-      // The hold on the row is looking at the same finger: it must stand down,
-      // or a swipe slower than `delayLongPress` opens the sheet on the way.
-      rowSwipes.add(id);
-    },
-    onPanResponderMove: (_e, g) => {
-      // Beyond the reach there is nothing more to show, so the row stops at the
-      // edge of its own band: the two bands each own half the row, and a travel
-      // past that would slide one into the other's ground.
-      const limit = Math.round(rowWidth() * 0.42);
-      dx.set(Math.max(-limit, Math.min(limit, g.dx)));
-    },
-    onPanResponderRelease: (_e, g) => {
-      rowSwipes.delete(id);
-      swipedAt = Date.now();
-      // The card is read from the board by id, never from a captured accessor:
-      // a list cell is recycled, and the row it is drawing now may not be the
-      // one whose handler was made.
-      const card = cards().find((c) => c.id === id && !c.deleted);
-      const travelled = Math.abs(g.dx);
-      // A long drag, or a short hard flick — the same distance in less effort.
-      const flick = travelled >= 28 && Math.abs(g.vx) > 900 && g.vx * g.dx > 0;
-      if (card && (travelled >= swipeReach() || flick)) {
-        const action = g.dx > 0 ? rowActions(card.status).right : rowActions(card.status).left;
-        // Put the value back before the write: the row leaves this column, and
-        // the cell that draws the next card must not inherit the travel.
-        dx.set(0);
-        action.run(card.id);
-        return;
-      }
-      back(g.vx);
-    },
-    onPanResponderTerminate: () => {
-      rowSwipes.delete(id);
-      swipedAt = Date.now();
-      back();
-    },
-  });
-  rowPans.set(key, pan);
-  return pan;
 }
 
 /** The card whose row actions are on screen, or `null`. */
 const rowSheetId = signal<string | null>(null);
 
 /**
- * The three writes a row has, without asking the finger to travel: the sheet a
- * held row opens.
+ * The three writes a row has: the sheet a held row opens.
  *
- * A swipe of the row's edge is the fast path; this is the one that always
- * arrives. The rows sit inside the pager that is the four columns, and a
- * horizontal drag can be claimed by that pager before the row's pan activates, so
- * a gesture that only ever existed as a swipe would leave 归档 unreachable on the
- * pages where the pager wins. A hold always lands.
+ * The hold is the row's one way in besides a tap. The rows sit inside the pager
+ * that is the four columns, so a horizontal drag belongs to the page turn; the
+ * check circle is the fast path for 完成, and this sheet is where 归档, 删除 and
+ * 打开 live on every page.
  */
 function RowSheet() {
   const card = () => cards().find((c) => c.id === rowSheetId());
@@ -514,26 +342,16 @@ function PhoneRow(props: { card: () => Card }) {
   // it drew, and the action handlers read the card as it is at the moment of the
   // press rather than as it was when the row was made.
   const read = props.card;
-  const dx = dragOf(c().id);
   const right = () => rowActions(c().status).right;
   const left = () => rowActions(c().status).left;
   // One line of the note under the title, with a checklist's boxes drawn as
   // boxes: the row is a glance, not an editor.
   const preview = () => previewLines(c().notes, 1);
   const list = () => parseChecklist(c().notes);
-  // A strip only acts where the pager has nowhere to go: 待办 is the first page,
-  // so a right swipe there has nothing to turn to, and 归档 is the last, so a
-  // left one does not either. Everywhere else the same drag is the page turn it
-  // looks like, and the hold is the row's own way in. Measured on a real Android
-  // device: an edge pan wins the touch against the pager on every page, so a
-  // strip left armed in the middle columns archived a card where the finger
-  // meant to turn the page — the opposite of what the strips are for.
-  const lead = () => (c().status === "todo" ? swipeFor(c().id, "lead").panHandlers : {});
-  const trail = () => (c().status === "archive" ? swipeFor(c().id, "trail").panHandlers : {});
   return (
     <View
-      // The two writes as custom actions, for a screen reader that has no swipe
-      // to give; the check circle and the detail sheet remain the ordinary paths.
+      // The two writes as custom actions, for a screen reader that cannot hold
+      // a row; the check circle and the detail sheet remain the ordinary paths.
       accessibilityActions={[
         { name: "complete", label: right().label },
         { name: "archive", label: left().label },
@@ -545,94 +363,31 @@ function PhoneRow(props: { card: () => Card }) {
         if (card.deleted) return;
         (e.actionName === "archive" ? left() : right()).run(card.id);
       }}
-      style={{ backgroundColor: "transparent", overflow: "hidden" }}
+      style={{ backgroundColor: "transparent" }}
     >
-      {/* The band under the row, one half each way. Drawn before the row so it
-          is only ever seen through what the row uncovers, and never past the
-          reach: green is 完成, the pressed paper is 归档, red is 删除. Hidden
-          from assistive technologies, which are offered the two actions above
-          instead of two words behind every row. */}
-      <View
-        importantForAccessibility="no-hide-descendants"
-        style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          bottom: 0,
-          width: "50%",
-          flexDirection: "row",
-          alignItems: "center",
-          gap: 7,
-          paddingLeft: 18,
-          backgroundColor: right().fill,
-        }}
-      >
-        <Icon name={right().icon} size={16} tint={right().ink} width={2.2} />
-        <Text style={{ fontSize: 13.5, fontWeight: "600", color: right().ink }}>{right().label}</Text>
-      </View>
-      <View
-        importantForAccessibility="no-hide-descendants"
-        style={{
-          position: "absolute",
-          right: 0,
-          top: 0,
-          bottom: 0,
-          width: "50%",
-          flexDirection: "row",
-          alignItems: "center",
-          justifyContent: "flex-end",
-          gap: 7,
-          paddingRight: 18,
-          backgroundColor: left().fill,
-        }}
-      >
-        <Text style={{ fontSize: 13.5, fontWeight: "600", color: left().ink }}>{left().label}</Text>
-        <Icon name={left().icon} size={16} tint={left().ink} width={2.2} />
-      </View>
       <View
         testID={`row-${c().id}`}
-        onPress={() => {
-          // A press that ends a swipe is the swipe's own tail (see `swipedAt`).
-          if (wasJustSwiped()) return;
-          openCard(c().id);
-        }}
-        // Held down, a row offers its writes without asking the finger to travel
-        // or to find an edge: the check circle, 归档, 删除 and 打开 in one sheet.
-        // A hold is the phone's own mark for "more actions on this row", and it
-        // is the path that works on every page — a horizontal drag inside the
-        // paged columns may be claimed by the pager, a hold never is.
-        onLongPress={() => {
-          // A finger that is already swiping an edge is not holding the row:
-          // the strip's pan announces itself on grant (see `rowSwipes`).
-          if (rowSwipes.has(c().id)) return;
-          rowSheetId.set(c().id);
-        }}
+        onPress={() => openCard(c().id)}
+        // Held down, a row offers its writes without asking the finger to travel:
+        // 完成 / 恢复, 归档 / 删除 and 打开 in one sheet. A hold is the phone's
+        // own mark for "more actions on this row", and it is the only path to
+        // 归档 and 删除 besides the detail sheet.
+        onLongPress={() => rowSheetId.set(c().id)}
         delayLongPress={420}
         activeStyle={{ backgroundColor: theme().cardPressed }}
         style={{
           flexDirection: "row",
           alignItems: "center",
           paddingVertical: 13,
-          // The row follows the finger through a native animated value.
-          translate: dx,
           // Rows sit on the column's sheet; a card per row would put a box
           // inside a box on a phone screen.
           backgroundColor: theme().card,
         }}
       >
-        {/* The leading edge: the circle, and a swipe that starts on it. A right
-            swipe needs room to travel, and only the edge nearer the far side of
-            the screen has any. */}
-        <View
-          {...lead()}
-          panActivation={{ activeOffsetX: 8, failOffsetY: 20 }}
-          testID={`swipe-lead-${c().id}`}
-          accessibilityLabel="右滑完成任务"
-          style={{ width: 46, alignSelf: "stretch", alignItems: "center", justifyContent: "center" }}
-        >
+        <View style={{ width: 46, alignSelf: "stretch", alignItems: "center", justifyContent: "center" }}>
           <CheckCircle card={c} onPress={() => setStatus(c().id, settled() ? "todo" : "done")} />
         </View>
-        <View style={{ flex: 1, gap: 5, paddingRight: c().status === "archive" ? 8 : 16 }}>
+        <View style={{ flex: 1, gap: 5, paddingRight: 16 }}>
           <Text
             style={{
               ...TYPE.phoneTitle,
@@ -654,32 +409,6 @@ function PhoneRow(props: { card: () => Card }) {
             </View>
           ) : null}
         </View>
-        {/* The trailing edge: a left swipe, and only on 归档 — the one page with
-            nothing to its right (see `trail` above). It is an unmarked quick path
-            for 删除; the hold is the way a finger finds it, so no mark is drawn,
-            and on the other three pages the strip takes no room at all, which
-            leaves the whole row to the title.
-
-            **The zone stops 24 points short of the screen's right edge.** The row
-            already stands 16 points in, which is inside the ~20 points the system
-            keeps for its own back gesture: a touch that started there never
-            reached the app at all — measured on a real Android device, a swipe
-            from the very edge left the app instead. Eight points of margin move
-            the whole target; the row's own background fills them. 56 points wide
-            (22 of them quiet reach at the inside) because a target under the 44
-            points a thumb needs is one a thumb hunts for. */}
-        <View
-          {...trail()}
-          panActivation={{ activeOffsetX: 8, failOffsetY: 20 }}
-          testID={`swipe-trail-${c().id}`}
-          accessibilityLabel="左滑删除"
-          style={{
-            width: c().status === "archive" ? 56 : 0,
-            marginRight: c().status === "archive" ? 8 : 0,
-            paddingLeft: c().status === "archive" ? 22 : 0,
-            alignSelf: "stretch",
-          }}
-        />
       </View>
     </View>
   );
@@ -1225,6 +954,80 @@ function LinkSheet() {
             配对
           </Text>
         </View>
+        {/* The notification permission, and a test that does not need a deadline.
+            A greyed system switch is a fact this line can at least name. */}
+        <View style={{ height: 1, backgroundColor: theme().hairline }} />
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={{ fontSize: 11.5, fontWeight: "600", color: theme().textTertiary, letterSpacing: 0.3 }}>
+              通知
+            </Text>
+            <Text testID="notify-line" style={{ fontSize: 12.5, lineHeight: 18, color: theme().textSecondary }}>
+              {notificationLine()}
+            </Text>
+          </View>
+          <View
+            testID="notify-test"
+            onPress={() => void testNotification()}
+            role="button"
+            accessibilityLabel="测试通知"
+            activeStyle={{ opacity: 0.6 }}
+            style={{
+              height: 34,
+              paddingHorizontal: 12,
+              borderRadius: 9,
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: theme().chip,
+            }}
+          >
+            <Text style={{ fontSize: 12.5, fontWeight: "600", color: theme().textSecondary }}>测试</Text>
+          </View>
+        </View>
+        {/* OTA: the app's code as a signed package. On Android it runs from the
+            next cold start, so the line says that and offers nothing to press;
+            the desktop offers 重启. It sits under 配对 because the sheet is
+            where a phone's own maintenance lives. */}
+        <View style={{ height: 1, backgroundColor: theme().hairline }} />
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={{ fontSize: 11.5, fontWeight: "600", color: theme().textTertiary, letterSpacing: 0.3 }}>
+              更新
+            </Text>
+            <Text
+              testID="update-line"
+              style={{
+                fontSize: 12.5,
+                lineHeight: 18,
+                color: updateState() === "failed" ? theme().danger : theme().textSecondary,
+              }}
+            >
+              {updateLine()}
+            </Text>
+          </View>
+          <If when={updateActionLabel() !== ""}>
+            <View
+              testID="update-action"
+              onPress={() => void takeUpdateAction()}
+              role="button"
+              accessibilityLabel={updateActionLabel()}
+              accessibilityState={{ disabled: updateState() === "checking" || updateState() === "downloading" }}
+              activeStyle={{ opacity: 0.6 }}
+              style={{
+                height: 34,
+                paddingHorizontal: 12,
+                borderRadius: 9,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: alpha(theme().accent, theme().dark ? 0.2 : 0.1),
+              }}
+            >
+              <Text style={{ fontSize: 12.5, fontWeight: "600", color: onAccentWash() }}>
+                {updateActionLabel()}
+              </Text>
+            </View>
+          </If>
+        </View>
         {/* A fresh install opens on fourteen written cards. Once the board is
             the user's own they are noise in every column, and this is where the
             phone can clear them — the same command is in the Mac's palette.
@@ -1583,10 +1386,10 @@ export function PhoneHome() {
         <Segment />
       </View>
 
-      {/* A deadline that came due while the app is open. The phone cannot post
-          a system notification (Android would drop it: the manifest has no
-          POST_NOTIFICATIONS and nsh cannot add one), so this is where a
-          reminder lands here. */}
+      {/* A deadline that came due while the app is open. With the notification
+          permission the phone posts a real system notification instead; this
+          line is what the list shows when the permission is denied or the
+          platform cannot show one. */}
       <If when={dueNow() !== null}>
         <View
           testID="due-banner"
