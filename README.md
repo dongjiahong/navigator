@@ -61,8 +61,7 @@ App 的 TSX 可以作为签名包（`.nshpkg`）从 GitHub Release 下发，不�
 
 - `app/nsh.json` 的 `updater` 指向 `dongjiahong/navigator` 的最新 Release，并写了两个公钥：`publicKey` 验 `latest.json`，`packages.roots` 验 `.nshpkg`。
 - 签名私钥在仓库外：`~/.navigator-ota/`（`root.secret` 离线保存；`release.secret`、`release.cert`、`update.secret` 用于发版）。**不要把任何 `.secret` 提交进仓库。**
-- GitHub Actions 的 `.github/workflows/ota.yml` 在推 `v*` tag 时用 nightly nsh 打包、签名并创建 Release。仓库需要三个 secret：`NSH_RELEASE_KEY`、`NSH_RELEASE_CERT`、`NSH_UPDATE_KEY`，内容分别是上面三个文件。**这套 CI 目前跑不起来**：`runs-on: macos-14` 在这个仓库报 `configuration 'macos-14-arm64-us-default' is not supported`，而 nightly nsh 只发 `macos-arm64` 包，没有能在 x86_64 runner 上跑的那份；所以实际的 Release 都是本地发出来的。
-- 不想用 CI 时，本地跑 `scripts/ota-release.sh --build 7 --notes CHANGES.md`，把 `dist/*.nshpkg`、`dist/latest.json`、`dist/latest.json.sig` 三个文件一起传到 GitHub Release（顺序：包先，manifest 和签名后）。
+- 没有 CI：发版全在本机。跑 `scripts/ota-release.sh --build 7 --notes CHANGES.md`，把 `dist/*.nshpkg`、`dist/latest.json`、`dist/latest.json.sig` 三个文件连同 APK 一起传到 GitHub Release（顺序：包先，manifest 和签名后）。
 - 每次发版都要把 `app/nsh.json` 的 `build` 加一；`version` 也一起改。App 只在包比当前 build 新时才装。
 - App 启动后 5 秒检查一次；手机在「连到 Mac」Sheet 里还有「检查更新」。Android/iOS 下载后**下次冷启动**运行，桌面可以按「重启」立刻运行。包第一次运行有 10 秒试用期，起不来会自动回退。
 

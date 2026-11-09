@@ -59,7 +59,7 @@ scripts/build-android.sh          # 仓库根目录执行；产物 app/.nsh/out/
 - OTA 只换 TSX/图片/字体；Rust crate、runtime、权限或 manifest 的改动需要新的 APK。
 - 界面上的版本号来自 `app/updates.ts` 的 `runningLabel()`：正在跑的 OTA 包优先，没有包时用 shell（APK）的 version/build，格式 `0.1.6 (build 7)`。
 - **发版由用户本机完成**（编译、打 tag、传 Release）；agent 不要代为推送 tag 或创建 Release。
-- CI 不可用：`.github/workflows/ota.yml` 在 `macos-14` 上报 `configuration 'macos-14-arm64-us-default' is not supported`，仓库也没有配任何 secret，推 tag 只会留下一个失败的 run。macOS 的 `.app` 同理，`nsh package --target macos` 在本机打，没有可用的 arm64 runner。
+- 没有 CI：`.github/workflows/ota.yml` 已删除，推 tag 不会自动发版。APK、OTA 包、Release 和 macOS 的 `.app`（`nsh package --target macos`）都在本机做。
 - 全量测试只在打包/发版前跑，不要每改一行都跑。
 
 ## 其他
