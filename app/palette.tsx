@@ -1,4 +1,4 @@
-import { Scroll, Text, View, effect, keymap, signal, windowSize } from "nsh";
+import { Scroll, Text, View, createMotion, effect, keymap, signal, windowSize } from "nsh";
 import { Dialog, Input } from "nsh/base";
 import { COLUMNS, boardTags, cards, sampleCardsLeft, type Card, type Status, type Tag } from "./data";
 import {
@@ -388,6 +388,14 @@ export function CommandPalette(props: {
     }
   };
 
+  // A short rise as the palette arrives, over `Dialog`'s fade: the field is what
+  // the eye has to land on, and four points of travel say where the panel came
+  // from without a second fade on the same surface.
+  const rise = createMotion();
+  effect(() => {
+    if (paletteOpen()) void rise.play({ duration: 160, keyframes: { translateY: [4, 0] } });
+  });
+
   /**
    * The keys belong to the palette only while it is up.
    *
@@ -432,6 +440,7 @@ export function CommandPalette(props: {
         backgroundColor: theme().panel,
         boxShadow: theme().shadowLift,
         overflow: "hidden",
+        ...rise.style,
       }}
     >
       <View

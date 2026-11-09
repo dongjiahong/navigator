@@ -96,22 +96,25 @@ test("a long title is kept whole in the panel", async () => {
   expect(app.shows("id:inspector-note-area")).toBe(true);
 });
 
-test("a link typed into a note becomes a row that opens it", async () => {
+test("a link in a note opens from the reading and from the field", async () => {
   const { app, desktop } = await openApp();
   if (!desktop) return;
 
-  await app.press("id:card-c2");
+  // c8's note is a bare link.
+  await app.press("id:card-c8");
   await app.waitFor("id:inspector-notes");
   expect(app.count("id:note-link")).toBe(0);
+  // The panel reads the note, and a link is drawn as a link there: nothing has
+  // to be listed under it to be pressable.
+  expect(app.texts().some((text) => text.includes("https://space.bilibili.com/3546652709226701"))).toBe(true);
 
-  await app.type("id:inspector-notes", "参考 https://example.com/reading，看完再改");
-  await app.wait(300);
+  // A field cannot press what it draws, so the editor lists the links instead.
+  await app.press("id:note-edit");
+  await app.waitFor("id:note-link");
   expect(app.count("id:note-link")).toBe(1);
-  // The URL is offered without the Chinese comma that ended it.
-  expect(app.texts()).toContain("https://example.com/reading");
 
-  await app.press("label:打开链接 https://example.com/reading");
-  expect(app.openedUrls()).toContain("https://example.com/reading");
+  await app.press("label:打开链接 https://space.bilibili.com/3546652709226701");
+  expect(app.openedUrls()).toContain("https://space.bilibili.com/3546652709226701");
 });
 
 test("the phone's detail sheet offers a note's link too", async () => {

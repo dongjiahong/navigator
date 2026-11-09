@@ -1,7 +1,7 @@
 import { expect, test } from "nsh/test";
 import { openSized } from "./testkit";
 import { epochOf, remindsAt, type Card } from "./data";
-import { applyResponse, reminderPlan } from "./deadline";
+import { SPREAD_MS, applyResponse, reminderPlan, spreadMoments } from "./deadline";
 import { openApp } from "./testkit";
 
 /**
@@ -66,6 +66,33 @@ test("an early reminder is planned ahead of the deadline, and only when there is
   expect(reminderPlan(card({ due: "2026-11-12T11:00" }), now, 15)).toEqual({});
   expect(reminderPlan(card({ due, deleted: true }), now, 15)).toEqual({});
   expect(reminderPlan(card(), now, 15)).toEqual({});
+});
+
+test("cards due at the same moment are handed over a banner apart", () => {
+  const at = new Date(2026, 10, 12, 9, 0).getTime();
+  const anHourOn = at + 60 * 60 * 1000;
+  const slots = [
+    { key: "b", at },
+    { key: "a", at },
+    { key: "c", at },
+    { key: "d", at: anHourOn },
+  ];
+
+  // One banner at a time is all the system shows, and three cards delivered
+  // inside a fifth of a second replace each other before any of them is read.
+  // The first keeps the deadline's own minute and the ones beside it follow a
+  // banner apart, in id order so two launches hand out the same times.
+  const spread = spreadMoments(slots);
+  expect(spread.map((slot) => [slot.key, slot.at])).toEqual([
+    ["a", at],
+    ["b", at + SPREAD_MS],
+    ["c", at + 2 * SPREAD_MS],
+    ["d", anHourOn],
+  ]);
+
+  // A plan is read more than once — by the effect and by the tick — so the
+  // helper answers with its own copy and leaves the board's plan alone.
+  expect(slots.map((slot) => slot.at)).toEqual([at, at, at, anHourOn]);
 });
 
 test("an answer does what it says, and nothing for a card that is gone", () => {

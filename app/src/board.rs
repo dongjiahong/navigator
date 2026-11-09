@@ -122,7 +122,19 @@ const MERGE_FIELDS: [&str; 8] = ["title", "notes", "tags", "due", "repeat", "sta
 /// and that is the answer for all of its fields: the older format merges
 /// exactly as it did, and the first write to a field gives it the stamp it
 /// should have had.
+///
+/// One exception, and it is a field a card cannot clear: a card with no `rank`
+/// has never been numbered, whatever its stamps say. The stamp such a card may
+/// still carry is the residue of the merge that erased its place, and reading it
+/// as a write makes the erasure permanent — the migration numbers the card again
+/// on every launch and every merge takes the number away again. A cleared
+/// deadline is the other case: the card that cleared it carries the field's own
+/// stamp, so its absence is a real write and it wins. Kept in step with
+/// `app/fields.ts`.
 fn field_stamp(card: &Value, field: &str) -> i64 {
+    if field == "rank" && !matches!(card.get("rank"), Some(Value::Number(_))) {
+        return -1;
+    }
     match card.get("stamps").and_then(|s| s.get(field)) {
         Some(Value::Number(n)) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)).unwrap_or_else(|| stamp(card)),
         _ => stamp(card),

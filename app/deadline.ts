@@ -26,6 +26,45 @@ export type ReminderPlan = {
 /** A minute, the unit the lead time is given in. */
 const MINUTE_MS = 60_000;
 
+/** How far apart reminders that share a moment are handed over. */
+export const SPREAD_MS = 2500;
+
+/**
+ * Reminders that fall on the same moment, one banner apart.
+ *
+ * The system shows one banner at a time, and it replaces the banner it is
+ * showing when the next one arrives. Three cards due at 09:00 are all delivered,
+ * within a couple of hundred milliseconds of each other, so the third wipes the
+ * second before it can be read and the second wipes the first: the user is told
+ * about one card, and Notification Centre holds the other two where nobody
+ * looked. Priority is not at stake, so the fix is the one thing the app can
+ * control — the spacing. The first keeps the moment, and the ones beside it
+ * follow a banner apart, in id order, which is the same order on every launch.
+ *
+ * A deadline a couple of seconds late is still its deadline; a deadline nobody
+ * was told about is the bug.
+ */
+export function spreadMoments<T extends { key: string; at: number }>(
+  slots: readonly T[],
+  gap: number = SPREAD_MS,
+): T[] {
+  const out = slots.map((slot) => ({ ...slot }));
+  out.sort((a, b) => a.at - b.at || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  /** The moment of the last group, unshifted, so the group is still recognised. */
+  let moment = Number.NaN;
+  let beside = -1;
+  for (const slot of out) {
+    if (slot.at !== moment) {
+      moment = slot.at;
+      beside = 0;
+      continue;
+    }
+    beside += 1;
+    slot.at += beside * gap;
+  }
+  return out;
+}
+
 /**
  * The reminders one card deserves, and the whole of the scheduling decision —
  * which is why it is a pure function.

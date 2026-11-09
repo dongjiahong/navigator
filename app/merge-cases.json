@@ -68,7 +68,7 @@
         "status": "todo",
         "deleted": false,
         "updatedAt": 20,
-        "stamps": { "title": 20, "notes": 1, "tags": 1, "due": 20, "repeat": 20, "status": 1, "deleted": 1, "rank": 20 }
+        "stamps": { "title": 20, "notes": 1, "tags": 1, "due": 20, "repeat": 20, "status": 1, "deleted": 1, "rank": -1 }
       }
     },
     {
@@ -99,7 +99,7 @@
         "status": "todo",
         "deleted": false,
         "updatedAt": 5,
-        "stamps": { "title": 5, "notes": 5, "tags": 5, "due": 5, "repeat": 5, "status": 5, "deleted": 5, "rank": 5 }
+        "stamps": { "title": 5, "notes": 5, "tags": 5, "due": 5, "repeat": 5, "status": 5, "deleted": 5, "rank": -1 }
       }
     },
     {
@@ -128,7 +128,7 @@
         "status": "todo",
         "deleted": false,
         "updatedAt": 20,
-        "stamps": { "title": 20, "notes": 20, "tags": 20, "due": 20, "repeat": 20, "status": 20, "deleted": 20, "rank": 20 }
+        "stamps": { "title": 20, "notes": 20, "tags": 20, "due": 20, "repeat": 20, "status": 20, "deleted": 20, "rank": -1 }
       }
     },
     {
@@ -197,7 +197,7 @@
         "status": "todo",
         "deleted": true,
         "updatedAt": 20,
-        "stamps": { "title": 1, "notes": 20, "tags": 1, "due": 20, "repeat": 20, "status": 1, "deleted": 10, "rank": 20 }
+        "stamps": { "title": 1, "notes": 20, "tags": 1, "due": 20, "repeat": 20, "status": 1, "deleted": 10, "rank": -1 }
       }
     },
     {
@@ -230,7 +230,7 @@
         "status": "todo",
         "deleted": false,
         "updatedAt": 40,
-        "stamps": { "title": 1, "notes": 1, "tags": 1, "due": 40, "repeat": 40, "status": 1, "deleted": 40, "rank": 40 }
+        "stamps": { "title": 1, "notes": 1, "tags": 1, "due": 40, "repeat": 40, "status": 1, "deleted": 40, "rank": -1 }
       }
     },
     {
@@ -413,7 +413,77 @@
         "status": "todo",
         "deleted": false,
         "updatedAt": 20,
-        "stamps": { "title": 20, "notes": 20, "tags": 20, "due": 20, "repeat": 20, "status": 20, "deleted": 20, "rank": 20 }
+        "stamps": { "title": 20, "notes": 20, "tags": 20, "due": 20, "repeat": 20, "status": 20, "deleted": 20, "rank": -1 }
+      }
+    },
+    {
+      "name": "没有排名的副本不会抹掉排名：没排过就不是一次写入",
+      "a": {
+        "id": "c13",
+        "title": "同一张卡",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "rank": 4000,
+        "deleted": false,
+        "updatedAt": 90,
+        "stamps": { "title": 10, "notes": 10, "tags": 10, "status": 10, "deleted": 10, "rank": 0 }
+      },
+      "b": {
+        "id": "c13",
+        "title": "同一张卡",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "deleted": false,
+        "updatedAt": 90,
+        "stamps": { "title": 10, "notes": 10, "tags": 10, "status": 10, "deleted": 10 }
+      },
+      "merged": {
+        "id": "c13",
+        "title": "同一张卡",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "rank": 4000,
+        "deleted": false,
+        "updatedAt": 90,
+        "stamps": { "title": 10, "notes": 10, "tags": 10, "due": 90, "repeat": 90, "status": 10, "deleted": 10, "rank": 0 }
+      }
+    },
+    {
+      "name": "抹掉排名时留下的戳不是一次写入：另一端的名次补回来",
+      "a": {
+        "id": "c14",
+        "title": "被抹过名次的卡",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "deleted": false,
+        "updatedAt": 90,
+        "stamps": { "title": 10, "notes": 10, "tags": 10, "status": 10, "deleted": 10, "rank": 200 }
+      },
+      "b": {
+        "id": "c14",
+        "title": "被抹过名次的卡",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "rank": 4000,
+        "deleted": false,
+        "updatedAt": 90,
+        "stamps": { "title": 10, "notes": 10, "tags": 10, "status": 10, "deleted": 10, "rank": 300 }
+      },
+      "merged": {
+        "id": "c14",
+        "title": "被抹过名次的卡",
+        "notes": "",
+        "tags": [],
+        "status": "todo",
+        "rank": 4000,
+        "deleted": false,
+        "updatedAt": 300,
+        "stamps": { "title": 10, "notes": 10, "tags": 10, "due": 90, "repeat": 90, "status": 10, "deleted": 10, "rank": 300 }
       }
     }
   ]

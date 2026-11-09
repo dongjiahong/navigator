@@ -42,8 +42,17 @@ export const MERGE_FIELDS: readonly MergeField[] = [
  * and that is what all of its fields answer: the older format merges exactly as
  * it did, and the first write to any field gives that field the stamp it
  * should have had.
+ *
+ * One exception, and it is a field a card cannot clear: a card with no `rank`
+ * has never been numbered, whatever its stamps say. The stamp such a card may
+ * still carry is the residue of the merge that erased its place, and reading it
+ * as a write makes the erasure permanent — the migration numbers the card again
+ * on every launch and every merge takes the number away again. A cleared
+ * deadline is the other case: the card that cleared it carries the field's own
+ * stamp, so its absence is a real write and it wins.
  */
 export function fieldStamp(card: Card, field: MergeField): number {
+  if (field === "rank" && typeof (card as { rank?: unknown }).rank !== "number") return -1;
   const own = card.stamps?.[field];
   return typeof own === "number" ? own : card.updatedAt ?? 0;
 }

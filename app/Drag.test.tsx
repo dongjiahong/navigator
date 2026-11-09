@@ -1,5 +1,5 @@
 import { expect, test } from "nsh/test";
-import { openApp } from "./testkit";
+import { openApp, openSized } from "./testkit";
 
 /**
  * Dragging a card between columns is the Mac's signature move: it needs a
@@ -70,6 +70,28 @@ test("a press on the card body opens it and moves nothing", async () => {
  * the case that used to be impossible: a card dropped at the top of a column
  * goes first.
  */
+/**
+ * A drop lands in the column under the pointer, on any window.
+ *
+ * The four columns reach `COL_MAX` and stop, and the row they stand in is then
+ * centred in whatever is left: a 2560-point window leaves nearly 550 points of
+ * margin before 待办. Measuring a drop from the board's own edge counted that
+ * margin as part of the first column, so a card dragged into 进行中 landed in
+ * 归档 two columns over — the drag worked, and put the card somewhere the user
+ * had not pointed at.
+ */
+test("a drop lands in the column under the pointer on a wide window", async () => {
+  const app = await openSized(2560, 1440);
+  if (!app) return;
+
+  // c9 is 待办's last card; one column to the right is 进行中.
+  await app.drag("id:card-c9", { x: 450, y: 0 });
+  await app.wait(400);
+
+  expect(app.shows("id:col-doing >> id:card-c9")).toBe(true);
+  expect(app.shows("id:col-archive >> id:card-c9")).toBe(false);
+});
+
 test("a card dropped at the top of a column goes first, not last", async () => {
   const { app, desktop } = await openApp();
   if (!desktop) return;

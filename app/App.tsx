@@ -20,6 +20,7 @@ import {
   type Status,
 } from "./data";
 import { startBadge } from "./badge";
+import { startClock } from "./clock";
 import { searchQuery } from "./filters";
 import { MacFilterBar } from "./FilterBar";
 import { adopt, clearFocus, focusId, focusedCard, keepFocus, moveFocus, shiftFocus } from "./focus";
@@ -269,6 +270,10 @@ async function boot() {
   startRecurrence();
   startReminders();
   startBadge();
+  // The last thing to start, and the smallest: the board reads the wall clock
+  // for a deadline's day word and its tone, so 明天 becomes 今天 at midnight and
+  // a deadline turns red at its hour with nobody touching the window.
+  startClock();
 }
 
 export function App() {

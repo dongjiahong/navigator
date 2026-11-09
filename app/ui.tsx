@@ -2,16 +2,19 @@ import {
   Canvas,
   Clipboard,
   Path2D,
+  Scroll,
   Text,
   View,
   computed,
+  createMotion,
+  effect,
   openUrl,
   signal,
   windowSize,
   type CanvasRenderingContext2D,
   type InputRef,
 } from "nsh";
-import { AlertDialog, Calendar, Dialog, Input, TimeField, type CalendarEntry } from "nsh/base";
+import { AlertDialog, Calendar, Dialog, Input, TextView, TimeField, type CalendarEntry } from "nsh/base";
 import { HUES, hueColor, onAccentWash, theme, TYPE } from "./theme";
 import {
   addTag,
@@ -31,7 +34,8 @@ import {
   type Repeat,
   type Tag,
 } from "./data";
-import { appendItem, parseChecklist, toggleItem, type ChecklistItem } from "./checklist";
+import { appendItem, noteSegments, parseChecklist, previewLines, toggleItem, type ChecklistItem } from "./checklist";
+import { clock } from "./clock";
 import { clearFilters, filteredBoard, searchQuery } from "./filters";
 import { nextRepeat, repeatLabel } from "./repeat";
 import { linksIn } from "./text";
@@ -165,6 +169,10 @@ export function TagRow(props: { ids: string[]; size?: "mac" | "phone" }) {
  */
 export function DueBadge(props: { iso: string; size?: "mac" | "phone"; settled?: boolean }) {
   const tree = computed(() => {
+    // The clock is read here so the day word and the tone follow it: a deadline
+    // that read 明天 when it was written reads 今天 at midnight, and the amber
+    // pill turns red at its hour, with nobody typing on the board.
+    clock();
     const t = theme();
     const label = dueLabel(props.iso);
     // A finished card is not late: its time is history, so it reads as one.
@@ -489,6 +497,9 @@ export function DueEditor(props: {
   onRepeatChange?: (repeat: Repeat | undefined) => void;
 }) {
   const tree = computed(() => {
+    // The day word and the tone are read off the clock, so the deadline editor
+    // says 今天 where it said 明天 last night — the same reading the card does.
+    clock();
     const t = theme();
     const phone = props.size === "phone";
     const due = props.due;
@@ -772,7 +783,8 @@ function RepeatChip(props: { repeat?: Repeat; onChange?: (repeat: Repeat | undef
  *
  * Six rows are shown. A card with more than that says how many are left and
  * where to go: a note of thirty items is a note to read, not a list to tick from
- * the card's panel.
+ * the card's panel. The Mac's panel reads the whole note instead (`NoteView`):
+ * there the rows are the note, not a strip under a field.
  */
 export function ChecklistRows(props: {
   notes: string;
@@ -789,7 +801,7 @@ export function ChecklistRows(props: {
             {(item) => (
               <ChecklistRow
                 item={item}
-                phone={phone}
+                size={phone ? "phone" : "mac"}
                 onPress={() => props.onChange(toggleItem(props.notes, item().line))}
               />
             )}
@@ -822,9 +834,18 @@ export function ChecklistRows(props: {
 
 /** One line of a checklist: a box, the item's words, and the press that flips
  *  it. A ticked item drops to tertiary ink — no green, which the board keeps for
- *  a finished card. */
-function ChecklistRow(props: { item: () => ChecklistItem; phone: boolean; onPress: () => void }) {
+ *  a finished card.
+ *
+ *  `panel` is the note read in a card's panel: a step larger than the board's
+ *  card, because there it is the note itself rather than a strip under it. */
+export function ChecklistRow(props: {
+  item: () => ChecklistItem;
+  size?: "mac" | "phone" | "panel";
+  onPress: () => void;
+}) {
   const done = () => props.item().done;
+  const phone = () => props.size === "phone";
+  const panel = () => props.size === "panel";
   return (
     <View
       testID={`checklist-toggle-${props.item().line}`}
@@ -836,16 +857,16 @@ function ChecklistRow(props: { item: () => ChecklistItem; phone: boolean; onPres
       style={{
         flexDirection: "row",
         alignItems: "flex-start",
-        gap: 8,
-        minHeight: props.phone ? 30 : 22,
+        gap: panel() ? 9 : 8,
+        minHeight: phone() ? 30 : 22,
         paddingRight: 2,
       }}
     >
       <View
         style={{
-          width: props.phone ? 17 : 14,
-          height: props.phone ? 17 : 14,
-          marginTop: props.phone ? 6 : 3.5,
+          width: phone() ? 17 : panel() ? 15 : 14,
+          height: phone() ? 17 : panel() ? 15 : 14,
+          marginTop: phone() ? 6 : panel() ? 2.5 : 3.5,
           borderRadius: 4,
           borderWidth: 1.4,
           // Solid tertiary ink, not a translucent one: a 1.4-point stroke of it
@@ -857,15 +878,15 @@ function ChecklistRow(props: { item: () => ChecklistItem; phone: boolean; onPres
           justifyContent: "center",
         }}
       >
-        {done() ? <Icon name="check" size={props.phone ? 11 : 9} tint={theme().textTertiary} width={2.4} /> : null}
+        {done() ? <Icon name="check" size={phone() ? 11 : 9} tint={theme().textTertiary} width={2.4} /> : null}
       </View>
       <Text
         style={{
           flex: 1,
-          fontSize: props.phone ? 14 : 12.5,
-          lineHeight: props.phone ? 21 : 19,
+          fontSize: phone() ? 14 : panel() ? 13 : 12.5,
+          lineHeight: phone() ? 21 : panel() ? 20.5 : 19,
           color: done() ? theme().textTertiary : theme().text,
-          numberOfLines: 2,
+          numberOfLines: panel() ? 0 : 2,
         }}
       >
         {props.item().text}
@@ -899,6 +920,210 @@ export function ChecklistProgress(props: { notes: string; size?: "mac" | "phone"
         >
           {`${list().done}/${list().total}`}
         </Text>
+      </View>
+    </If>
+  );
+}
+
+/**
+ * The note as a surface shows it once there is nothing to type: prose drawn as
+ * Markdown, and each checklist line a row with its box.
+ *
+ * The note is still one string, written the way it always was. What changes is
+ * which of its two readings a surface shows: an editor showing `- [ ]` above a
+ * row that says the same thing twice is the same note told twice. So a note is
+ * *read* here — one box per line, links drawn as links — and pressing it is the
+ * way into the field that keeps the source.
+ *
+ * `onEdit` is the press on the prose (a checklist row keeps its own press: that
+ * one ticks the line); `onChange` is a tick or the ＋, both writes to the same
+ * text, so nothing here is a second copy of the note.
+ */
+export function NoteView(props: {
+  notes: string;
+  size?: "mac" | "phone";
+  onChange: (notes: string) => void;
+  onEdit: () => void;
+  /** A cap for a sheet that has other things under the note (the phone). */
+  maxHeight?: number;
+}) {
+  const phone = () => props.size === "phone";
+  const segments = () => noteSegments(props.notes);
+  const hasItems = () => segments().some((segment) => segment.kind === "item");
+  return (
+    <Scroll
+      testID="note-view"
+      scrollbar={false}
+      style={props.maxHeight ? { maxHeight: props.maxHeight } : { flex: 1 }}
+      contentStyle={{ gap: phone() ? 7 : 6, paddingRight: 2, paddingBottom: 2 }}
+    >
+      {/* An empty note has nothing to read, so the placeholder is the thing to
+          press: the panel keeps its one way in whatever the card holds. */}
+      <If when={!props.notes.trim()}>
+        <View
+          testID="note-empty"
+          onPress={props.onEdit}
+          role="button"
+          accessibilityLabel="写备注"
+          style={{ minHeight: 24, justifyContent: "center" }}
+        >
+          <Text
+            style={{
+              fontSize: phone() ? 14 : 13,
+              lineHeight: phone() ? 21 : 20.5,
+              color: theme().textTertiary,
+            }}
+          >
+            补充细节、链接、下一步…
+          </Text>
+        </View>
+      </If>
+      <Each of={segments()} key={(segment) => `${segment.kind}-${segment.at}`}>
+        {(segment) => (
+          <View>
+            <If when={segment().kind === "prose"}>
+              <View
+                onPress={props.onEdit}
+                role="button"
+                accessibilityLabel="编辑备注"
+                hoverStyle={{ opacity: 0.85 }}
+                activeStyle={{ opacity: 0.7 }}
+              >
+                <MarkdownBlock text={segment().text} size={props.size} />
+              </View>
+            </If>
+            <If when={segment().kind === "item"}>
+              <ChecklistRow
+                item={() => segment().item ?? { line: segment().at, text: segment().text, done: false }}
+                size={phone() ? "phone" : "panel"}
+                onPress={() => props.onChange(toggleItem(props.notes, segment().at))}
+              />
+            </If>
+          </View>
+        )}
+      </Each>
+      {/* One more item, appended and opened for typing: a ＋ whose item has no
+          words yet would be a row nobody can see. */}
+      <If when={hasItems()}>
+        <View
+          testID="checklist-add"
+          onPress={() => {
+            props.onChange(appendItem(props.notes));
+            props.onEdit();
+          }}
+          role="button"
+          accessibilityLabel="添加清单项"
+          hitSlop={6}
+          activeStyle={{ opacity: 0.55 }}
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 6,
+            alignSelf: "flex-start",
+            minHeight: phone() ? 30 : 24,
+            paddingRight: 6,
+          }}
+        >
+          <Icon name="plus" size={phone() ? 15 : 13} tint={theme().textTertiary} width={1.9} />
+          <Text style={{ fontSize: phone() ? 13 : 12, fontWeight: "500", color: theme().textTertiary }}>
+            再加一项
+          </Text>
+        </View>
+      </If>
+      {/* The blank space under the words is a way in, as it is in any notes app:
+          on a short note it is the largest thing in the panel, and it should not
+          be the one thing that does nothing. */}
+      <View
+        testID="note-edit"
+        onPress={props.onEdit}
+        role="button"
+        accessibilityLabel="编辑备注"
+        style={{ minHeight: phone() ? 36 : 30 }}
+      />
+    </Scroll>
+  );
+}
+
+/**
+ * A run of a note's prose, drawn as Markdown.
+ *
+ * `TextView` reads it in Rust and draws it with native texts, so bold, a
+ * heading, a quote and a list are the ones the user typed rather than raw
+ * syntax. A link takes the reader's ink and an underline instead of the accent:
+ * the accent is spent on what the user presses, and a note full of blue would
+ * be a web page in the middle of the board.
+ */
+function MarkdownBlock(props: { text: string; size?: "mac" | "phone" }) {
+  const phone = () => props.size === "phone";
+  return (
+    <TextView
+      markdown={props.text}
+      // A link is pressed where it is drawn, as a link in a page is: the note
+      // is read here, so nothing has to be listed under it to be pressable.
+      onLinkPress={({ url }) => openLink(url)}
+      style={{ gap: 6 }}
+      styles={{
+        root: {
+          fontSize: phone() ? 14 : 13,
+          lineHeight: phone() ? 21 : 20.5,
+          color: theme().text,
+        },
+        link: { color: theme().textSecondary, textDecorationLine: "underline" },
+      }}
+    />
+  );
+}
+
+/**
+ * A note as a card or a phone row previews it: two lines on the Mac, one on the
+ * phone, with a checklist's boxes drawn as boxes.
+ *
+ * The old preview took the markers off and kept the words, which read as a list
+ * of sentences. A row with a box is the same two lines and says what the note
+ * is: work to tick, not prose. It stays a glance — no row is taller than a line
+ * of the body — so the card's measure does not change.
+ */
+export function NotePreview(props: { notes: string; size?: "mac" | "phone"; lines?: number }) {
+  const phone = () => props.size === "phone";
+  const lines = () => previewLines(props.notes, props.lines ?? 2);
+  return (
+    <If when={lines().length > 0}>
+      <View style={{ gap: 1 }}>
+        <Each of={lines()} key={(line) => String(line.at)}>
+          {(line) => (
+            <View style={{ flexDirection: "row", alignItems: "flex-start", gap: phone() ? 6 : 5 }}>
+              <If when={line().done !== null}>
+                <View
+                  style={{
+                    width: phone() ? 12 : 11,
+                    height: phone() ? 12 : 11,
+                    marginTop: phone() ? 3.5 : 3.6,
+                    borderRadius: 3,
+                    borderWidth: 1.2,
+                    borderColor: theme().textTertiary,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <If when={line().done === true}>
+                    <Icon name="check" size={phone() ? 8 : 7} tint={theme().textTertiary} width={2.2} />
+                  </If>
+                </View>
+              </If>
+              <Text
+                style={{
+                  flex: 1,
+                  fontSize: phone() ? 13 : 12.5,
+                  lineHeight: phone() ? 19 : 18.5,
+                  color: line().done ? theme().textTertiary : theme().textSecondary,
+                  numberOfLines: 1,
+                }}
+              >
+                {line().text}
+              </Text>
+            </View>
+          )}
+        </Each>
       </View>
     </If>
   );
@@ -1386,6 +1611,13 @@ export async function clearSamples(): Promise<void> {
  */
 export function UndoToast(props: { phone?: boolean }) {
   const phone = props.phone;
+  // The line comes up from the foot of the surface rather than appearing: it
+  // arrives while the eye is still on the card that went away, and a message
+  // that slides into the place the press was made reads as the press's answer.
+  const line = createMotion();
+  effect(() => {
+    if (undoable() !== null) void line.play("slideInUp", { duration: 220 });
+  });
   return (
     <If when={undoable() !== null}>
       <View
@@ -1426,6 +1658,7 @@ export function UndoToast(props: { phone?: boolean }) {
             // neutrals, and both take the same ink (14.5:1 and 13.3:1).
             backgroundColor: phone ? theme().select : theme().card,
             boxShadow: theme().shadowLift,
+            ...line.style,
           }}
         >
           <Text

@@ -42,17 +42,40 @@ export const boardGeom = {
   colW: 288,
   /** Height of a column's label row, above its first card. */
   headerH: HDR_H,
-  /** The board's place in the window. `pageX` / `pageY` are measured from it. */
+  /**
+   * Where the columns stand, in the window's coordinates: the board's own place
+   * plus the offset of the row that holds them.
+   *
+   * The row is centred once the window is wider than four columns, their
+   * gutters and the page margins — a 2560-point window leaves it nearly 550
+   * points in. A drop measured from the board alone therefore counted those
+   * points as part of the first column, and a card dragged into 进行中 landed in
+   * 归档 two columns over. `pageX` / `pageY` are measured from here.
+   */
   left: 0,
   top: 0,
+  /** The board's origin inside its parent. */
+  boardX: 0,
+  boardY: 0,
+  /** The columns' row inside the board. */
+  rowX: 0,
+  rowY: 0,
   scrollY: [0, 0, 0, 0],
   bands: new Map<Status, Band>(),
   heights: new Map<string, number>(),
   /** Each column's y inside the board's row, from the column's `onLayout`. */
   columnY: new Map<Status, number>(),
   setOrigin(x: number, y: number) {
-    this.left = x;
-    this.top = y;
+    this.boardX = x;
+    this.boardY = y;
+    this.left = this.boardX + this.rowX;
+    this.top = this.boardY + this.rowY;
+  },
+  setRowOrigin(x: number, y: number) {
+    this.rowX = x;
+    this.rowY = y;
+    this.left = this.boardX + this.rowX;
+    this.top = this.boardY + this.rowY;
   },
   setBand(status: Status, band: Band) {
     this.bands.set(status, band);

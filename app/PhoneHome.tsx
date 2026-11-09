@@ -12,7 +12,7 @@ import {
   type InputRef,
   type ScrollRef,
 } from "nsh";
-import { Input, Sheet } from "nsh/base";
+import { Input, Sheet, Switch } from "nsh/base";
 import {
   COLUMNS,
   addCard,
@@ -44,7 +44,8 @@ import {
   toggleTagFilter,
   type DueCondition,
 } from "./filters";
-import { notePreview, parseChecklist } from "./checklist";
+import { parseChecklist, previewLines } from "./checklist";
+import { clock } from "./clock";
 import {
   ChecklistProgress,
   ChecklistRows,
@@ -53,6 +54,7 @@ import {
   Icon,
   IconButton,
   NoteLinks,
+  NotePreview,
   SearchField,
   TagManagerButton,
   TagPicker,
@@ -515,9 +517,9 @@ function PhoneRow(props: { card: () => Card }) {
   const dx = dragOf(c().id);
   const right = () => rowActions(c().status).right;
   const left = () => rowActions(c().status).left;
-  // One line of the note under the title, with a checklist's boxes taken off:
-  // the row is a glance, not an editor.
-  const preview = () => notePreview(c().notes);
+  // One line of the note under the title, with a checklist's boxes drawn as
+  // boxes: the row is a glance, not an editor.
+  const preview = () => previewLines(c().notes, 1);
   const list = () => parseChecklist(c().notes);
   // A strip only acts where the pager has nowhere to go: 待办 is the first page,
   // so a right swipe there has nothing to turn to, and 归档 is the last, so a
@@ -640,11 +642,7 @@ function PhoneRow(props: { card: () => Card }) {
           >
             {c().title || "未命名卡片"}
           </Text>
-          {preview() ? (
-            <Text style={{ fontSize: 13, lineHeight: 19, color: theme().textSecondary, numberOfLines: 1 }}>
-              {preview()}
-            </Text>
-          ) : null}
+          {preview().length > 0 ? <NotePreview notes={c().notes} size="phone" lines={1} /> : null}
           {c().tags.length > 0 || c().due || list().total > 0 ? (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 11, flexWrap: "wrap", marginTop: 1 }}>
               {c().tags.length > 0 ? <TagRow ids={c().tags} size="phone" /> : null}
@@ -799,13 +797,16 @@ function CaptureSheet() {
             pressed on the phone's capture sheet did nothing at all. */}
         <TagPicker selected={draftTags()} onChange={(ids) => draftTags.set(ids)} size="phone" />
         <DueEditor due={draftDue()} size="phone" onChange={(iso) => draftDue.set(iso)} />
-        <View
+        {/* The switch is `nsh/base`'s: presses, keyboard activation and the
+            switch role and value come with it, and the two parts are the app's
+            own. The thumb travels the track's inner width, and the colour and
+            the travel change natively rather than by a style of a check-box
+            drawn from scratch. */}
+        <Switch
           testID="capture-keep"
-          onPress={() => setKeepAdding(!keepAdding())}
-          role="switch"
+          checked={keepAdding()}
+          onChange={({ checked }) => setKeepAdding(checked)}
           accessibilityLabel="连续添加"
-          accessibilityState={{ checked: keepAdding() }}
-          activeStyle={{ opacity: 0.6 }}
           style={{
             flexDirection: "row",
             alignItems: "center",
@@ -815,23 +816,27 @@ function CaptureSheet() {
             paddingRight: 12,
             marginVertical: -4,
           }}
+          trackStyle={{
+            width: 34,
+            height: 20,
+            borderRadius: 10,
+            padding: 2,
+            backgroundColor: keepAdding() ? theme().accent : theme().chip,
+            transitionProperty: "background-color",
+            transitionDuration: 150,
+          }}
+          thumbStyle={{
+            width: 16,
+            height: 16,
+            borderRadius: 8,
+            backgroundColor: keepAdding() ? onAccentFill() : theme().card,
+            transform: [{ translateX: keepAdding() ? 14 : 0 }],
+            transitionProperty: "transform, background-color",
+            transitionDuration: 150,
+          }}
         >
-          <View
-            style={{
-              width: 18,
-              height: 18,
-              borderRadius: 5,
-              borderWidth: keepAdding() ? 0 : 1.4,
-              borderColor: theme().textTertiary,
-              backgroundColor: keepAdding() ? theme().accent : "transparent",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            {keepAdding() ? <Icon name="check" size={12} tint={onAccentFill()} width={2.6} /> : null}
-          </View>
           <Text style={{ fontSize: 13.5, color: theme().textSecondary }}>连续添加</Text>
-        </View>
+        </Switch>
         <View
           testID="capture-save"
           onPress={() => {
@@ -1309,7 +1314,9 @@ function FilterOption(props: {
 }
 
 function FilterSheet() {
-  const counts = () => dueCounts(board(), Date.now());
+  // The counts follow the clock, as they do on the Mac: a deadline that is 今天
+  // at midnight is counted as today when the sheet is open across it.
+  const counts = () => dueCounts(board(), clock());
   return (
     <Sheet
       open={filterOpen()}

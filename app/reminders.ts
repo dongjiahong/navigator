@@ -7,6 +7,7 @@ import {
   leadMinutes,
   loadLead,
   reminderPlan,
+  spreadMoments,
   type Response,
 } from "./deadline";
 
@@ -138,32 +139,42 @@ export function syncReminders(): void {
   if (reminderState() !== "granted") return;
   const now = Date.now();
   const lead = leadMinutes();
-  /** The slots to keep, by the identifier the system knows each by. */
-  const wants = new Map<string, { at: number; stamp: string; title: string; body: string }>();
+  /** Every slot the board wants, before the shared moments are spread out. */
+  const planned: { key: string; at: number; words: string; title: string; body: string }[] = [];
 
   for (const card of board()) {
     if (!remindsAt(card, now)) continue;
     const plan = reminderPlan(card, now, lead);
     const title = card.title || "未命名卡片";
-    // The stamp is the deadline and the title, never the notes: a note is not
-    // what a notification says past its first line, and re-sending on every
-    // keystroke would be a native call per letter.
+    // The words a slot is recognised by are the deadline and the title, never
+    // the notes: a note is not what a notification says past its first line,
+    // and re-sending on every keystroke would be a native call per letter.
     if (plan.at !== undefined) {
-      wants.set(card.id, {
+      planned.push({
+        key: card.id,
         at: plan.at,
-        stamp: `${plan.at}|${card.due}|${card.title}`,
+        words: `${card.due}|${card.title}`,
         title,
         body: (card.notes.trim() || "截止时间到了").slice(0, 120),
       });
     }
     if (plan.pre !== undefined) {
-      wants.set(`${card.id}${EARLY}`, {
+      planned.push({
+        key: `${card.id}${EARLY}`,
         at: plan.pre,
-        stamp: `${plan.pre}|${card.due}|${card.title}|${lead}`,
+        words: `${card.due}|${card.title}|${lead}`,
         title: `${lead} 分钟后到期：${title}`,
         body: earlyBody(card, lead),
       });
     }
+  }
+
+  // One banner at a time is all the system shows, so cards due together are
+  // handed over a banner apart — see `spreadMoments`. The slot's own time is
+  // part of what the system was told, so a spread counts as a new schedule.
+  const wants = new Map<string, { at: number; stamp: string; title: string; body: string }>();
+  for (const slot of spreadMoments(planned)) {
+    wants.set(slot.key, { at: slot.at, stamp: `${slot.at}|${slot.words}`, title: slot.title, body: slot.body });
   }
 
   for (const [key, want] of wants) {

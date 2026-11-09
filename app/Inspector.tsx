@@ -1,7 +1,7 @@
-import { Text, View, signal, windowSize } from "nsh";
+import { Text, View, createMotion, effect, signal, windowSize, type InputRef } from "nsh";
 import { Dialog, Input } from "nsh/base";
 import { COLUMNS, cards, patchCard, removeWithUndo, type Card, type Status } from "./data";
-import { ChecklistRows, DueEditor, IconButton, NoteLinks, TagPicker, alpha } from "./ui";
+import { DueEditor, IconButton, NoteLinks, NoteView, TagPicker, alpha } from "./ui";
 import { charsPerLine, fieldHeight } from "./text";
 import { noteHeight as heightOfNote, panelSize } from "./panel";
 import { theme, onAccentWash, TYPE } from "./theme";
@@ -62,9 +62,34 @@ export function Inspector(props: {
   const width = () => panelSize(windowSize()).width;
   const innerWidth = () => width() - 36;
   // The field is the measured box, or a share of the panel until the first
-  // layout reports one, and never under `NOTE_MIN`: a checklist under it takes
-  // space from the box, and a note narrowed to a stripe is not a note.
+  // layout reports one, and never under `NOTE_MIN`: the reading and the rows sit
+  // in the same box as the field, so a note narrowed to a stripe is not a note.
   const noteHeight = () => heightOfNote(noteBox(), height());
+  // Which card's note is open for typing. It is the id, not a flag: the panel
+  // can move to another card while it is open, and a flag would carry the typing
+  // state onto a card nobody touched. Nothing is reset when the panel closes
+  // either — a closed panel is showing no card's note, so there is nothing to
+  // put back (and an effect that wrote a signal on the way out would re-render a
+  // subtree whose card had gone).
+  const editingId = signal<string | null>(null);
+  const editingNote = () => props.id !== null && editingId() === props.id;
+  // The note's field, for the press that opens it: `focus()` is what puts the
+  // caret in it, and the field itself reports the focus it took.
+  let noteField: InputRef | null = null;
+  const editNote = () => {
+    editingId.set(props.id);
+    // The field is mounted all along (it is the note's one editor), so the
+    // focus is asked for at once: a press that opens the note leaves the caret
+    // in it, and a key that follows the press has somewhere to go.
+    noteField?.focus();
+  };
+  // A short rise as the panel arrives. It moves the panel by a few points and
+  // does not touch its opacity — `Dialog` already fades it in, and two fades on
+  // one surface read as a slow one.
+  const rise = createMotion();
+  effect(() => {
+    if (open()) void rise.play({ duration: 180, keyframes: { translateY: [6, 0] } });
+  });
   return (
     <Dialog
       testID="inspector"
@@ -82,6 +107,7 @@ export function Inspector(props: {
         backgroundColor: theme().panel,
         boxShadow: theme().shadowLift,
         overflow: "hidden",
+        ...rise.style,
       }}
     >
       {/* The platform's title bar is above this panel, so its own strip is a
@@ -204,12 +230,17 @@ export function Inspector(props: {
 
         {/* The note, and the rest of the panel's height. The box around the
             field is what `flex: 1` sizes and `onLayout` reports; the field takes
-            that height, and a note longer than it scrolls its own text. */}
+            that height, and a note longer than it scrolls its own text.
+
+            The field stays mounted while the note is read: it is the note's one
+            editor, and showing it is what a press on the note does. The reading
+            is a layer over the field, on the panel's own fill, so the two never
+            reflow the panel — the box has the same measure in both states, and
+            the caret lands where the note was. */}
         <View
           testID="inspector-note-area"
           style={{
             flex: 1,
-            gap: 6,
             paddingTop: 10,
             borderTopWidth: 1,
             borderTopColor: theme().hairlineSoft,
@@ -219,6 +250,9 @@ export function Inspector(props: {
             <Input
               testID="inspector-notes"
               multiline
+              ref={(r) => {
+                noteField = r;
+              }}
               // The field scrolls its own text, and the bar is chrome the app did
               // not draw: the board and the phone's pages hide theirs for the
               // same reason. A page of paper has no scrollbar down its side.
@@ -226,6 +260,17 @@ export function Inspector(props: {
               value={card().notes}
               placeholder="补充细节、链接、下一步…"
               onChange={({ value }) => patchCard(card().id, { notes: value })}
+              // The press on the note reveals the field (`editNote`); leaving
+              // the field puts the reading back. The field does not reveal
+              // itself on focus: it is mounted under the reading all along, and
+              // a focus that came without a press (a test typing into it) is
+              // not the user asking for the source.
+              onBlur={() => editingId.set(null)}
+              // The field is under the reading, so it is also out of the screen
+              // reader's tree until the reading is put away: a note read twice,
+              // once as text and once as a field, is two notes to a listener.
+              accessibilityElementsHidden={!editingNote()}
+              importantForAccessibility={editingNote() ? "auto" : "no-hide-descendants"}
               style={{
                 ...TYPE.body,
                 color: theme().text,
@@ -234,12 +279,39 @@ export function Inspector(props: {
                 padding: 0,
               }}
             />
+            <If when={!editingNote()}>
+              <View
+                // Any press that is not a checklist box or a link is the note
+                // asking to be written in: the reading is the whole box, and a
+                // blank stretch under a short note should not be the one part
+                // of the panel that does nothing.
+                onPress={editNote}
+                accessibilityLabel="编辑备注"
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  backgroundColor: theme().panel,
+                }}
+              >
+                <NoteView
+                  notes={card().notes}
+                  onChange={(next) => patchCard(card().id, { notes: next })}
+                  onEdit={editNote}
+                />
+              </View>
+            </If>
           </View>
-          {/* The note's checklist, under the field: ticking a line is a write to
-              the note, so the text stays the text the person typed and the rows
-              are only a way to press it. */}
-          <ChecklistRows notes={card().notes} onChange={(next) => patchCard(card().id, { notes: next })} />
-          <NoteLinks text={card().notes} />
+          {/* A field cannot press what it draws, so the links a note carries are
+              rows of their own — and only while the field is what is showing:
+              the reading draws them as links. */}
+          <If when={editingNote()}>
+            <View style={{ paddingTop: 6 }}>
+              <NoteLinks text={card().notes} />
+            </View>
+          </If>
         </View>
       </View>
     </Dialog>

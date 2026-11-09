@@ -303,7 +303,10 @@ one thing genuinely above the desk, and it grew because the note is its body —
 
 **Nothing on the board scrolls sideways, and nothing shows a scrollbar.** The
 columns grow with the window to `COL_MAX` and then stop, and the row centers
-itself once there is room to spare. The window is held above the width at which
+itself once there is room to spare. **The drop is measured from that row, not from
+the board's edge**: on a 2560-point window the centring leaves nearly 550 points
+before 待办, and counting them as part of the first column made a card dragged
+into 进行中 land in 归档 two columns over. The window is held above the width at which
 four columns reach `COL_MIN` — nsh has no minimum-size API, so an `effect` puts
 the window back to that floor as soon as it goes under. With no horizontal
 scroll view there is no horizontal scrollbar to leave one; the vertical ones are
@@ -406,8 +409,9 @@ checklist.
 **A checklist is a note, written a certain way.** `- [ ] ` and `- [x] ` at the
 start of a note's lines *are* the list: there is no field, so the list merges,
 syncs and exports as the note it already was, and the card's two-line preview
-strips the boxes — five things read as five things rather than five rows of
-`- [ ]`. The meta row carries only a check glyph and the count, `2/5`, in tabular
+draws the boxes — an item is a row with a square, so two items read as two things
+to tick rather than two sentences that happen to start with a dash. The meta row
+carries only a check glyph and the count, `2/5`, in tabular
 figures, and
 **the count is always Ink Tertiary**: green on this board means a finished card,
 so a checklist that is fully ticked must not dress itself as one.
@@ -497,6 +501,13 @@ Tertiary when it is later than today; amber on its wash when it is today; red on
 its wash when it is late. A finished card drops the 已逾期 prefix: its time is
 history, not a warning.
 
+**The day word is read off the clock, not off the last edit.** 明天 21:00 written
+on Monday evening reads 今天 21:00 on Tuesday, and turns amber and then red at
+its own hour, with nobody typing on the board. The label is computed where it is
+drawn from a wall-clock signal the deadline-shaped views read — the two pills,
+the inspector's editor, both filter counts — so the board looks at the date
+because the date moved, not because something else did.
+
 The deadline is edited in two parts. Three chips set the *day* (今天 / 明天 / 下周)
 and keep the time already on the card, so 明天 on a 14:30 deadline means tomorrow
 at 14:30 rather than tomorrow at 09:00. A `TimeField` beside them sets the hour and
@@ -545,6 +556,15 @@ a deadline that comes due while the app is open puts one line above the list:
 amber glyph, 到时间了, the card's title, 打开 and a dismiss. It is a banner the app
 draws, and it is honest about being one.
 
+**One banner at a time is all the system shows.** Cards due at the same minute are
+each handed over, and the system replaces the banner in front of the eye with the
+next one within a couple of hundred milliseconds: three deadlines at 09:00 read
+as one notification, and the other two sit in Notification Centre where nobody
+looked. So the app spaces them itself — the first keeps the deadline's own
+minute, the ones beside it follow a banner (2.5 s) apart, in id order so every
+launch hands out the same times. A deadline a couple of seconds late is still the
+deadline; a deadline nobody was told about is the bug.
+
 **Ahead of time, and answerable.** A card may carry a second notification, one lead
 time before the deadline, and that lead is a setting of *this Mac* rather than of
 the card: `navigator.leadMinutes` in Storage, off by default, one palette row per
@@ -577,20 +597,31 @@ trapdoor. `Input` has no height of its own, so the note's box is measured and it
 height handed to the field; the first frame falls back to a share of the panel so
 there is no flicker.
 
-**The checklist is the note, shown as rows.** Up to six of the note's checklist
-lines sit under the field — a box, the item's words, a press that flips one line
-of the same text — with a ＋ that appends `- [ ] ` at the note's foot and one
-quiet line, 还有 N 项，在备注里编辑, when there are more. Six, because a note of
-thirty items is a note to read rather than a list to tick from a panel; ticking is
-an edit of the note and not a change of status, so it moves no card and offers no
-撤销. The rows take height from the note, which is why the field has a floor
-(`NOTE_MIN` = 80) that the rows can never squeeze it past. The box's stroke is
-solid tertiary ink, not a translucent one: the blended version tests at 3.8:1,
-under what a control's edge is allowed.
+**The note is read, and a press puts the source back.** The panel opens on the
+note drawn: prose as Markdown — a heading is a heading, a link is a link — and
+each checklist line a row with its box, ticked with one press. Pressing the prose,
+or the blank space under it, reveals the field, which is the note's one editor
+and holds the text exactly as it was typed; leaving the field puts the reading
+back. The field stays mounted under the reading, so the two never reflow the box:
+the note has the same height either way, and the reading is a layer on the
+panel's own fill, not a second surface. Nothing is shown twice — the editor's
+`- [ ]` no longer stands over a row that says the same thing — and the reading
+shows the whole note, in a scroll of its own, instead of six rows and a count.
 
-The note's links are listed under it — http(s) URLs found in the text, at secondary
-ink with a link glyph, never in the accent, each a press that opens the browser. A
-link the user can see and cannot press is a worse lie than no link.
+The note still has one floor (`NOTE_MIN` = 80) under its box, and the panel
+itself still does not scroll: a card is a note with a few decisions over it.
+Ticking a box is an edit of the note and not a change of status, so it moves no
+card and offers no 撤销; the box's stroke is solid tertiary ink, not a translucent
+one, because the blended version tests at 3.8:1, under what a control's edge is
+allowed.
+
+**A field cannot press what it draws, so links come in two forms.** In the
+reading, an http(s) link is a span of the prose — secondary ink with an
+underline, never the accent — and a press opens the browser where it is drawn.
+In the field, where the text is plain and nothing in it is pressable, the note's
+links are listed under it as rows with a link glyph, each a press that opens the
+same address. A link the user can see and cannot press is a worse lie than no
+link.
 
 Deleting a card does not ask. The tombstone keeps every field, so the same press
 offers 撤销 at the foot of the window: the question moved after the act, where it
@@ -650,7 +681,10 @@ Detail: the title and notes are **editable on the phone too**, in native fields 
 the sheet itself — above its controls, outside any scroll view, because an input
 nested in a scroll view has no native field on Android and no tap could ever focus
 it. Every keystroke patches the card, so there is no save button and nothing to
-lose. The sheet keeps every tap as well: status chips, tags, the deadline editor,
+lose. The Mac's reading has no counterpart on the phone yet: a field and the
+note's rows on the sheet are what a thumb reaches, and the field cannot move into
+a scroll view to make room for a reading. The sheet keeps every tap as well:
+status chips, tags, the deadline editor,
 the note's checklist rows (on the sheet, outside any scroll view, like the fields
 they belong to), archive, and a delete that offers 撤销 rather than asking.
 
@@ -772,7 +806,13 @@ each field of a card — title, notes, tags, due, status, deleted, rank — carr
 own stamp, so the title typed on the Mac and the 完成 pressed on the phone in the
 same minute both survive. Where the stamps are equal the larger serialized text of
 the two values wins, in UTF-16 code-unit order on both sides, so two devices can
-never flip a value back and forth. A deleted card is kept as `{...card, deleted:
+never flip a value back and forth. **A field a card cannot clear is never cleared
+by absence**: a card with no `rank` has never been numbered, so the copy that has
+none cannot win the place the other device gave it — otherwise introducing the
+order against a board written before it erased every rank on the first merge, and
+kept erasing the resurrected ones. A cleared deadline is the other case: the card
+that cleared it carries the field's own stamp, so the absence is a write and it
+wins. A deleted card is kept as `{...card, deleted:
 true}` with a new stamp rather than dropped: a dropped id is pushed straight back
 by the other device on the next merge, and an undo is the same row with a newer
 `deleted` stamp. **A stamp is minted above every stamp already on the board**, not
@@ -870,6 +910,9 @@ waited out in full.
 - **Do** keep the keyboard's cursor and the open card distinguishable: the cursor
   keeps its shadow, the open card trades it for its hairline.
 - **Do** let the note be the body of the inspector, and let the panel never scroll.
+- **Do** show a note once on a surface: read it (Markdown drawn, checklist boxes
+  tickable), and let a press put the source back. A field above a row that says
+  the same thing is one note told twice.
 
 ### Don't:
 
@@ -897,6 +940,8 @@ waited out in full.
   the sheet its own way back.
 - **Don't** leave the system title bar on a native app: a band of chrome the app
   did not draw above its own header reads as a browser window.
+- **Don't** show a note's source and the same note rendered on one surface: pick
+  the reading, and let a press put the source back.
 - **Don't** ship an editable field *inside a scroll view* on the phone: on Android
   it has no native view and no tap can focus it. The detail sheet's fields sit on
   the sheet, above its controls, for exactly this reason.

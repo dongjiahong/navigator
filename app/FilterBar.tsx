@@ -1,6 +1,7 @@
 import { Text, View, signal, windowSize } from "nsh";
 import { Dialog } from "nsh/base";
 import { board, boardTags } from "./data";
+import { clock } from "./clock";
 import {
   DUE_LABEL,
   clearTagFilters,
@@ -92,7 +93,9 @@ function FilterChip(props: {
 
 /** 今天 / 已逾期 / 无日期: one at a time, and pressing the chosen one clears it. */
 function DateFilterRow() {
-  const counts = () => dueCounts(board(), Date.now());
+  // The counts are the board's own reading of the clock: at midnight 今天 grows
+  // and 已逾期 takes what the hour has passed, without anyone filtering.
+  const counts = () => dueCounts(board(), clock());
   return (
     <View testID="date-filters" style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
       {DUE_ORDER.map((id) => (
@@ -133,7 +136,7 @@ function stripBudget(width: number): number {
   return tagBudget(width, {
     clear: isFiltering(),
     dateGroup: dateGroupWidth(
-      DUE_ORDER.map((id) => ({ label: DUE_LABEL[id], count: dueCounts(board(), Date.now())[id] })),
+      DUE_ORDER.map((id) => ({ label: DUE_LABEL[id], count: dueCounts(board(), clock())[id] })),
     ),
   });
 }

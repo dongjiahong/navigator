@@ -1,9 +1,9 @@
 import { LayoutAnimation, List, Overlay, PanResponder, Text, View, signal } from "nsh";
 import { cards, COLUMNS, moveCard, setStatus, type Card, type Status } from "./data";
-import { notePreview, parseChecklist } from "./checklist";
+import { parseChecklist, previewLines } from "./checklist";
 import { filteredBoard, isFiltering } from "./filters";
 import { clearFocus, lists } from "./focus";
-import { ChecklistProgress, DueBadge, Icon, IconButton, TagRow, clearArchive } from "./ui";
+import { ChecklistProgress, DueBadge, Icon, IconButton, NotePreview, TagRow, clearArchive } from "./ui";
 import { theme, TYPE } from "./theme";
 import { COL_GAP, COL_MAX, HDR_H, PAD_X, PAD_Y, ROW_GAP, ROW_TOP, boardGeom } from "./geom";
 
@@ -256,9 +256,9 @@ function CardView(props: {
   // the focused card keeps its shadow, so it reads as a card under the cursor
   // rather than a card laid into the desk. The open card wins where both apply.
   const lifted = () => props.selected || props.focused;
-  // The note as two lines of a card show it: a checklist's boxes are stripped,
-  // or a note that is mostly a list would spend the preview on `- [ ]`.
-  const preview = () => notePreview(card().notes);
+  // The note as two lines of a card show it: a checklist's boxes are drawn as
+  // boxes rather than stripped, so two items read as work to tick.
+  const preview = () => previewLines(card().notes, 2);
   const list = () => parseChecklist(card().notes);
   return (
     <View
@@ -361,10 +361,8 @@ function CardView(props: {
           {card().title || "未命名卡片"}
         </Text>
       </View>
-      {preview() ? (
-        <Text style={{ ...TYPE.body, fontSize: 12.5, lineHeight: 18.5, color: theme().textSecondary, numberOfLines: 2 }}>
-          {preview()}
-        </Text>
+      {preview().length > 0 ? (
+        <NotePreview notes={card().notes} />
       ) : null}
       {card().tags.length > 0 || card().due || list().total > 0 ? (
         <View
@@ -554,6 +552,11 @@ export function MacBoard(props: {
         onLayout={(e) => boardGeom.setOrigin(e.bounds.origin.x, e.bounds.origin.y)}
       >
         <View
+          // The row the columns stand in, which is centred once the window is
+          // wider than the board needs: a drop is measured from here rather
+          // than from the board's own edge, or a card dragged into one column
+          // on a wide window lands in the next.
+          onLayout={(e) => boardGeom.setRowOrigin(e.bounds.origin.x, e.bounds.origin.y)}
           style={{
             width: boardWidth(props.width),
             flex: 1,

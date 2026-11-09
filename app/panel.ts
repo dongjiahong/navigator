@@ -41,11 +41,10 @@ export function noteShare(panelHeight: number): number {
 /**
  * The smallest the note is ever allowed to be, measured or not.
  *
- * The note area holds more than the field now: a checklist's rows sit under it,
- * and the space they take is space the measured box loses. A box that collapsed
- * to nothing would be a field nobody can type in, so the height has a floor even
- * when the panel is full — the note is the body of the card, and the panel does
- * not scroll to give it more.
+ * The note area holds the field and — while the note is read — the same note
+ * drawn as Markdown and rows, and all of it sits inside the one measured box. A
+ * short window can still squeeze that box, so the height has a floor: the note
+ * is the body of the card, and the panel does not scroll to give it more.
  */
 export const NOTE_MIN = 80;
 

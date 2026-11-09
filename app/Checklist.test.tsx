@@ -90,12 +90,16 @@ test("the panel ticks a note's checklist, and the card counts it", async () => {
 
   await app.press("id:card-c2");
   await app.waitFor("id:inspector-notes");
-  // The note is still a plain field: the checklist is typed into it.
+  // A press on the note opens the field, and the typing goes into the note's
+  // one text. The reading is what a card opens on, so closing and opening the
+  // card again is the way back to it.
   await app.type("id:inspector-notes", LIST);
+  await app.press("label:关闭");
+  await app.press("id:card-c2");
   await app.waitFor("id:checklist-toggle-2");
 
   // Three items, one ticked — and the card on the board says so in its meta row.
-  expect(app.shows("id:checklist")).toBe(true);
+  expect(app.shows("id:note-view")).toBe(true);
   expect(app.shows("id:checklist-toggle-2")).toBe(true);
   await app.press("label:关闭");
   await app.waitFor("id:col-todo >> text:1/3");
@@ -119,7 +123,7 @@ test("the panel ticks a note's checklist, and the card counts it", async () => {
   expect(app.shows("id:col-todo >> text:0/4")).toBe(true);
 });
 
-test("a note with more than six items says how many are left", async () => {
+test("a long checklist is read whole in the panel", async () => {
   const app = await openSized(1280, 820);
   if (!app) return;
 
@@ -127,14 +131,18 @@ test("a note with more than six items says how many are left", async () => {
   await app.waitFor("id:inspector-notes");
   const many = Array.from({ length: 8 }, (_, i) => `\n- [ ] 第 ${i + 1} 项`).join("");
   await app.type("id:inspector-notes", many);
+  await app.press("label:关闭");
+  await app.press("id:card-c2");
   // The rows appear when the note has been patched and re-read; waiting for the
-  // sixth is the real condition, where a fixed pause only holds on an idle machine.
-  await app.waitFor("id:checklist-toggle-6");
+  // eighth is the real condition, where a fixed pause only holds on an idle machine.
+  await app.waitFor("id:checklist-toggle-8");
 
-  // Six rows are shown and the rest are counted; the rows are not the editor.
-  expect(app.shows("id:checklist-toggle-6")).toBe(true);
-  expect(app.shows("id:checklist-toggle-7")).toBe(false);
-  expect(app.texts()).toContain("还有 2 项，在备注里编辑");
+  // The panel reads the note itself, in a scroll of its own: every item is a
+  // row, and none is counted away. The six-row cap belonged to the strip that
+  // used to sit under the field.
+  expect(app.shows("id:checklist-toggle-7")).toBe(true);
+  expect(app.shows("id:checklist-toggle-8")).toBe(true);
+  expect(app.texts()).not.toContain("还有 2 项，在备注里编辑");
 });
 
 test("a checklist in a short window leaves the note a field, not a stripe", async () => {
@@ -145,13 +153,20 @@ test("a checklist in a short window leaves the note a field, not a stripe", asyn
   await app.press("id:card-c2");
   await app.waitFor("id:inspector-notes");
   await app.type("id:inspector-notes", Array.from({ length: 6 }, (_, i) => `\n- [ ] 第 ${i + 1} 项`).join(""));
-  await app.waitFor("id:checklist-toggle-5");
 
-  // The note is still there to type in, the rows are under it, and the panel's
-  // own controls are still on the surface: nothing has been pushed off.
+  // While the note is being typed into, the field has the whole box and the
+  // panel's own controls are still on the surface: nothing is pushed off.
   expect(app.shows("id:inspector-notes")).toBe(true);
   expect(app.value("id:inspector-notes")).toContain("第 6 项");
-  expect(app.shows("id:checklist-toggle-5")).toBe(true);
+  expect(app.shows("label:关闭")).toBe(true);
+  expect(app.shows("label:删除卡片")).toBe(true);
+
+  // Read back, the whole list is in the note's own scroll, still inside the box
+  // the field had: the panel did not grow, and the note did not become a stripe.
+  await app.press("label:关闭");
+  await app.press("id:card-c2");
+  await app.waitFor("id:checklist-toggle-5");
+  expect(app.shows("id:note-view")).toBe(true);
   expect(app.shows("id:checklist-add")).toBe(true);
   expect(app.shows("label:关闭")).toBe(true);
   expect(app.shows("label:删除卡片")).toBe(true);
