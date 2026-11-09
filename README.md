@@ -36,7 +36,7 @@ nsh 0.4.0 没有任何通知 API。App 现在把 nsh 固定到 main 的 `36b9168
 
 **Android：App 打开时能发系统通知。** nsh main 增加了 `Notifications`，`nsh package` 在 App 可以通知时会往 manifest 写 `POST_NOTIFICATIONS`（不声明 `capabilities` 的独立 App 默认拥有这项能力）。`reminders.ts` 在 Android 上读取/请求通知权限；App 每 20 秒检查一次「五分钟内刚到期」的卡，有权限就发一条 `id` 为 `navigator.card.<卡片 id>` 的系统通知，标题是「到时间了：…」，点通知会打开手机的卡片详情页。权限被拒或平台发不了时，仍然退回列表上方的横幅（「打开」/「知道了」）。手机「连到 Mac」Sheet 里新增了「通知」一栏：一行显示当前权限状态，旁边「测试」按钮会请求权限并发一条「通知测试」，不用等到某个截止时间。
 
-**通知开关是灰色时先确认安装包。** 本仓库打出的 `0.1.6 (build 7)` APK 的 manifest 里同时有 `INTERNET` 和 `POST_NOTIFICATIONS`；旧包没有后者，Android 13+ 的通知页就会把开关画成灰的、点不动。用 `app/.nsh/out/Navigator.apk` 覆盖安装（`adb install -r`，保留数据），再打开 App 看「连到 Mac → 通知」。如果版本已经是 0.1.6 但开关仍灰，检查这台手机上领航是不是被停用、被工作资料/家长控制限制，或装在另一个用户下；用下面的命令能看到实际装的是哪个包、有没有声明权限：
+**通知开关是灰色时先确认安装包。** 本仓库打出的 `0.1.7 (build 8)` APK 的 manifest 里同时有 `INTERNET` 和 `POST_NOTIFICATIONS`；旧包没有后者，Android 13+ 的通知页就会把开关画成灰的、点不动。用 `app/.nsh/out/Navigator.apk` 覆盖安装（`adb install -r`，保留数据），再打开 App 看「连到 Mac → 通知」。如果版本已经是 0.1.7 但开关仍灰，检查这台手机上领航是不是被停用、被工作资料/家长控制限制，或装在另一个用户下；用下面的命令能看到实际装的是哪个包、有没有声明权限：
 
 ```sh
 adb shell dumpsys package com.lele.navigator | grep -E 'versionName|versionCode|POST_NOTIFICATIONS'
@@ -57,11 +57,11 @@ adb shell pm grant com.lele.navigator android.permission.POST_NOTIFICATIONS
 
 ## OTA 更新
 
-App 的 TSX 可以作为签名包（`.nshpkg`）从 GitHub Release 下发，不用每次重新装 APK。**装一次 `0.1.6 (build 7)` 的 APK 之后**，只改界面、逻辑、图片和字体都可以走 OTA；改 Rust crate、nsh runtime、权限或 manifest 仍然要出新 APK。
+App 的 TSX 可以作为签名包（`.nshpkg`）从 GitHub Release 下发，不用每次重新装 APK。**装一次 `0.1.7 (build 8)` 的 APK 之后**，只改界面、逻辑、图片和字体都可以走 OTA；改 Rust crate、nsh runtime、权限或 manifest 仍然要出新 APK。
 
 - `app/nsh.json` 的 `updater` 指向 `dongjiahong/navigator` 的最新 Release，并写了两个公钥：`publicKey` 验 `latest.json`，`packages.roots` 验 `.nshpkg`。
 - 签名私钥在仓库外：`~/.navigator-ota/`（`root.secret` 离线保存；`release.secret`、`release.cert`、`update.secret` 用于发版）。**不要把任何 `.secret` 提交进仓库。**
-- 没有 CI：发版全在本机。跑 `scripts/ota-release.sh --build 7 --notes CHANGES.md`，把 `dist/*.nshpkg`、`dist/latest.json`、`dist/latest.json.sig` 三个文件连同 APK 一起传到 GitHub Release（顺序：包先，manifest 和签名后）。
+- 没有 CI：发版全在本机。跑 `scripts/ota-release.sh --build 8 --notes CHANGES.md`，把 `dist/*.nshpkg`、`dist/latest.json`、`dist/latest.json.sig` 三个文件连同 APK 一起传到 GitHub Release（顺序：包先，manifest 和签名后）。
 - 每次发版都要把 `app/nsh.json` 的 `build` 加一；`version` 也一起改。App 只在包比当前 build 新时才装。
 - App 启动后 5 秒检查一次；手机在「连到 Mac」Sheet 里还有「检查更新」。Android/iOS 下载后**下次冷启动**运行，桌面可以按「重启」立刻运行。包第一次运行有 10 秒试用期，起不来会自动回退。
 
@@ -206,7 +206,7 @@ nsh 只认一个 `icon` 键（写对象会报 `invalid type: map`），所以 An
 
 ## 验证过的
 
-- 无头：`nsh test` → 278 通过 + 2 条按设计跳过（`src/pairing_test.rs` 里会写盘的两条 `#[ignore]`，要单独跑）。共 280 条：TSX 界面测试 223 + Rust 单测 57（55 通过 + 2 条跳过）。
+- 无头：`nsh test` → 280 通过 + 2 条按设计跳过（`src/pairing_test.rs` 里会写盘的两条 `#[ignore]`，要单独跑）。共 282 条：TSX 界面测试 225 + Rust 单测 57（55 通过 + 2 条跳过）。
 - macOS 全量：`nsh test --target macos` → **分文件验证，没有跑过合并后的全量**，所以这里不填数字。
 - Android 真机（Redmi 25060RK16C / Android 16，Wi-Fi 调试）：`nsh test --target android` → 28 个测试文件、187 个用例，186 通过；唯一失败的一条属于手机行的侧滑，那块正在改，数字之后单独补。Android 目标只跑 TSX 测试，crate 的 Rust 单测在无头那一轮里跑，两个数字不能相加。
 - 真机同步与配对（手机与 Mac 同网段 `192.168.6.x`，Mac 端用隔离的 `HOME` 运行）：未配对时状态行是「需要配对码」；输对码即「已同步」且两端计数一致；错码显示「配对码不对」且不会反复重试；连错 5 次显示「尝试太多次，稍后再试」，锁定期内没有请求发出；Mac 重新生成配对码后手机回到「配对码不对」；重启手机后不再要求输码。
