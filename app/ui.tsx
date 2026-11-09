@@ -39,6 +39,16 @@ import { clock } from "./clock";
 import { clearFilters, filteredBoard, searchQuery } from "./filters";
 import { nextRepeat, repeatLabel } from "./repeat";
 import { linksIn } from "./text";
+import {
+  dismissUpdate,
+  takeUpdateAction,
+  updateActionLabel,
+  updateCurrent,
+  updateDetail,
+  updateLine,
+  updateState,
+  updateVisible,
+} from "./updates";
 
 /** `#rrggbb` → `rgba(r, g, b, a)`. */
 export function alpha(hex: string, a: number): string {
@@ -1872,6 +1882,119 @@ export function UndoToast(props: { phone?: boolean }) {
             size={phone ? 32 : 26}
             label="关闭提示"
             onPress={dismissUndo}
+          />
+        </View>
+      </View>
+    </If>
+  );
+}
+
+/**
+ * What a check for updates says on the Mac.
+ *
+ * The palette only has the verb; the answer — which version is running, what
+ * the check found, why it failed — is a line at the foot of the board, where
+ * the undo line lives, and it is there only while a check is being answered.
+ * A package it finds waits for the press: 发现 is not yet a download.
+ */
+export function UpdateToast(props: { phone?: boolean }) {
+  const phone = props.phone;
+  // Above the undo line when one is up: the two messages are different answers
+  // and neither may cover the other.
+  const bottom = computed(() => (undoable() !== null ? 76 : 20));
+  return (
+    <If when={updateVisible() && !phone}>
+      <View
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          alignItems: "center",
+          pointerEvents: "box-none",
+          paddingHorizontal: 16,
+        }}
+      >
+        <View
+          testID="update-toast"
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 10,
+            maxWidth: 460,
+            marginBottom: bottom(),
+            paddingLeft: 14,
+            paddingRight: 6,
+            paddingVertical: 8,
+            borderRadius: 12,
+            backgroundColor: theme().card,
+            boxShadow: theme().shadowLift,
+          }}
+        >
+          <View style={{ flexShrink: 1, gap: 2 }}>
+            <Text
+              testID="update-toast-line"
+              style={{
+                fontSize: 13,
+                fontWeight: "500",
+                color: updateState() === "failed" ? theme().danger : theme().text,
+                numberOfLines: 2,
+              }}
+            >
+              {updateLine()}
+            </Text>
+            <Text
+              testID="update-toast-version"
+              style={{
+                fontSize: 11.5,
+                color: theme().textTertiary,
+                fontVariant: ["tabular-nums"],
+                numberOfLines: 1,
+              }}
+            >
+              {updateCurrent()}
+            </Text>
+            <If when={updateDetail() !== ""}>
+              <Text
+                testID="update-toast-detail"
+                style={{
+                  fontSize: 11.5,
+                  color: theme().textTertiary,
+                  numberOfLines: 2,
+                }}
+              >
+                {updateDetail()}
+              </Text>
+            </If>
+          </View>
+          <If when={updateActionLabel() !== ""}>
+            <View
+              testID="update-toast-action"
+              onPress={() => void takeUpdateAction()}
+              role="button"
+              accessibilityLabel={updateActionLabel()}
+              accessibilityState={{ disabled: updateState() === "checking" || updateState() === "downloading" }}
+              activeStyle={{ opacity: 0.6 }}
+              style={{
+                height: 26,
+                paddingHorizontal: 10,
+                borderRadius: 7,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: alpha(theme().accent, theme().dark ? 0.14 : 0.09),
+              }}
+            >
+              <Text style={{ fontSize: 12.5, fontWeight: "600", color: onAccentWash() }}>
+                {updateActionLabel()}
+              </Text>
+            </View>
+          </If>
+          <IconButton
+            name="close"
+            tint={theme().textTertiary}
+            size={26}
+            label="关闭更新提示"
+            onPress={dismissUpdate}
           />
         </View>
       </View>

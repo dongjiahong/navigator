@@ -63,7 +63,7 @@ import {
 import { fieldHeight } from "./text";
 import { hueColor, theme, onAccentFill, onAccentWash, TYPE } from "./theme";
 import { dismissDue, dueNow, notificationLine, testNotification } from "./reminders";
-import { takeUpdateAction, updateActionLabel, updateLine, updateState } from "./updates";
+import { takeUpdateAction, updateActionLabel, updateDetail, updateLine, updateState } from "./updates";
 import { connectTo, detail, endpoint, pairLine, pairWith, peers, phase, start, statusLine, syncNow } from "./sync";
 import { canPair, digits, pairCode, peerLine } from "./pairing";
 
@@ -1004,6 +1004,14 @@ function LinkSheet() {
             >
               {updateLine()}
             </Text>
+            <If when={updateDetail() !== ""}>
+              <Text
+                testID="update-detail"
+                style={{ fontSize: 11.5, lineHeight: 16, color: theme().textTertiary, numberOfLines: 2 }}
+              >
+                {updateDetail()}
+              </Text>
+            </If>
           </View>
           <If when={updateActionLabel() !== ""}>
             <View

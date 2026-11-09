@@ -11,7 +11,7 @@ import {
   type DueCondition,
 } from "./filters";
 import { LEAD_CHOICES, leadMinutes, setLeadMinutes } from "./deadline";
-import { updateState } from "./updates";
+import { updateReady, updateState } from "./updates";
 import { Icon, IconButton, clearArchive, clearSamples, managingTags } from "./ui";
 import { hueColor, theme, type Hue } from "./theme";
 
@@ -304,10 +304,15 @@ export function closePalette(): void {
 /** The update row says what the press will do, not always 检查更新. */
 function updateRowLabel(): string {
   switch (updateState()) {
+    case "found": {
+      const found = updateReady();
+      return found ? `更新到 ${found.version}` : "安装更新";
+    }
     case "ready":
       return "重启以应用更新";
-    case "checking":
     case "downloading":
+      return "正在下载更新…";
+    case "checking":
       return "正在检查更新…";
     case "failed":
       return "检查更新（上次失败）";

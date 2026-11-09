@@ -37,6 +37,7 @@ import {
   TagManager,
   TimePicker,
   UndoToast,
+  UpdateToast,
   alpha,
   blurSearch,
   focusSearch,
@@ -461,6 +462,9 @@ export function App() {
           completion and an archive are all one press from being taken back, and
           the app says so in the same place whichever device did it. */}
       <UndoToast phone={windowSize().width < WIDE} />
+      {/* What a check for updates answered, at the foot of the board and only
+          while it is being answered: the palette has the verb, this the reply. */}
+      <UpdateToast phone={windowSize().width < WIDE} />
       {/* Export, import and restore: the line that reports them, and the sheet
           that lists a week of snapshots. One mount, both layouts. */}
       <BackupTool />
