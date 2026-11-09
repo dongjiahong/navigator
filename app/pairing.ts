@@ -98,6 +98,19 @@ export async function storedCode(): Promise<string> {
   return digits((await Storage.getItem(CODE_KEY)) ?? "");
 }
 
+/**
+ * What one peer in the device list is doing, in one quiet word.
+ *
+ * The code comes before the connection: a device that answers and will not let
+ * this one in is a device the user can fix in a moment, and "未连上" would send
+ * them looking at the network instead.
+ */
+export function peerLine(peer: { ok: boolean; pair?: string }): string {
+  if (peer.pair === "wrong") return "配对码不对";
+  if (peer.pair === "locked") return "稍后再试";
+  return peer.ok ? "已同步" : "未连上";
+}
+
 /** Keeps `code` on this device, and shows it wherever it is read. */
 export async function saveCode(code: string): Promise<void> {
   await Storage.setItem(CODE_KEY, digits(code));

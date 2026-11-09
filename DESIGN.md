@@ -762,7 +762,7 @@ where a user looks when a phone will not connect — opens a 340pt `panel`: 配�
 read as one number), one line saying to type them into 连到 Mac once, and 重新生成
 at tertiary ink at the foot. Making a new code asks first in the platform's alert:
 every paired phone has to be handed the new digits, and the app cannot take that
-back. The digits never appear in the status line — a code printed beside 等待手机 is
+back. The digits never appear in the status line — a code printed beside 等待设备 is
 a number nobody can find when they need it.
 
 ### Dock badge
@@ -781,19 +781,33 @@ Sync is part of the surface, not plumbing behind it, because the phone is only
 useful if it holds the same board. A handful of decisions shape what the user
 sees.
 
-**The Mac is the server, and only while it is open.** Its service is a thread in
-the app's own process. Quitting the app closes the port, so the phone cannot
-sync against a stale copy, and there is no daemon to install or manage.
+**Every Mac serves, and only while it is open.** Its service is a thread in the
+app's own process. Quitting the app closes the port, so the phone cannot sync
+against a stale copy, and there is no daemon to install or manage. With two Macs
+both serve and both also look: they find each other on the network and exchange
+boards directly, and the phone syncs with every Mac it finds. A Mac that is
+closed is a peer that is not answering this minute; the board on the others is
+whole without it.
 
-**The phone finds the Mac; it does not remember an address.** A typed IP is a
-config file that rots the first time the router reissues a lease. Instead the
-phone broadcasts `NAVIGATOR/1 DISCOVER` on its own subnet and reads the Mac's
-address off the unicast reply it gets back, the way LocalSend finds its peers.
+**The phone is the one device that does not serve.** It is not a daemon and must
+not behave like one. The exchange is a round trip — the phone sends the rows it
+changed and the answer carries the Mac's — so nothing a Mac has must be
+initiated into the phone, and a listener there would be a port that has to
+survive the background for no benefit. Its changes reach every Mac all the same.
+
+**Every device finds the others; none remembers an address.** A typed IP is a
+config file that rots the first time the router reissues a lease. Instead each
+device broadcasts `NAVIGATOR/1 DISCOVER` on its own subnet and reads each
+answering Mac's address off the unicast reply, the way LocalSend finds its peers.
 Each interface's own broadcast address is used rather than `255.255.255.255`:
 the global broadcast leaves by the default route, which on a phone with mobile
-data is not the Wi-Fi. A failed exchange drops the known Mac and probes again,
-so a sleep, a new lease and a network change all heal within seconds. Typing an
-address stays as the fallback for a network that drops broadcasts.
+data is not the Wi-Fi. A probe collects **every** answer, not the first: two Macs
+on one LAN both answer, and a board that only met the quicker one would be a board
+half of the devices share. A device recognises its own answer by port and address
+and ignores it. A peer that stops answering is dropped and probed for again, so a
+sleep, a new lease and a network change all heal within seconds. Typing an address
+stays as the fallback for a network that drops broadcasts, and it is one more
+peer beside whatever a probe finds, not a decision to ignore the other Macs.
 
 **The board is a file on each device, not a copy of the other's.** Each device
 keeps its board in a SQLite file in its own data directory: quitting the app
@@ -829,27 +843,52 @@ strict watermark would never ask for it. A board of a thousand archived cards co
 a few hundred bytes per keystroke, and a phone that has been alone for a day
 catches up in one round trip.
 
-**A code, not an account.** A LAN at a coffee shop is everybody's LAN, so the Mac
-keeps six digits, shows them in its own title band, and the phone proves it read
-them: `GET /challenge` hands out a 16-byte nonce good for thirty seconds and one
-use, and `/state` wants `HMAC-SHA256(code, nonce)` in a header. The code itself
-never crosses the wire; the comparison is constant-time; five failures lock the
-door for a minute, and a lockout is waited out in full rather than shortened by
-coming back to the app. Guessing a million codes five times a minute is about four
-months. What this buys is that a neighbour cannot read or
-write the board; what it does not buy is secrecy, because the cards themselves
-still travel as plain HTTP on the local network. The phone's own line is where a
-wrong code is reported — 需要配对码 / 配对码不对 / 尝试太多次，稍后再试 — in the same
-quiet tertiary ink as everything else sync has to say, one line, never a banner.
+**Each peer has its own watermark and its own backlog.** A Mac that is shut, or
+that holds a different code, must not stop another one from being in step: the
+refusal and the lockout belong to that peer, the rows it missed wait in its own
+backlog, and the rest of the board keeps moving. Repeating an exchange is safe
+because the merge is per field and a tombstone is a value, so the same row may
+cross as often as it likes.
 
-The header's status line is the only place any of this shows: `等待手机` on the
-Mac, and `已同步 HH:MM` / `查找中` / `连不上 Mac，正在重新查找` on the phone. It
-is one line of tertiary ink, tap-ready on the phone to open 连到 Mac — the address
-and the six digits in one sheet — and it never becomes a banner, a toast or a
+**One board, one code.** A LAN at a coffee shop is everybody's LAN, so the board
+keeps six digits, shows them in a title band, and every device proves it read
+them: `GET /challenge` hands out a 16-byte nonce good for thirty seconds and one
+use, and `/state` wants `HMAC-SHA256(code, nonce)` in a header. The digits belong
+to the board rather than to the machine that made them: a second Mac types them
+once in its own 配对码 panel and answers to them from then on, and the phone types
+the same six. The code itself never crosses the wire; the comparison is
+constant-time; five failures lock that door for a minute, and a lockout is waited
+out in full rather than shortened by coming back to the app. Guessing a million
+codes five times a minute is about four months. What this buys is that a
+neighbour cannot read or write the board; what it does not buy is secrecy,
+because the cards themselves still travel as plain HTTP on the local network.
+The status line is where a wrong code is reported — 需要配对码 / 配对码不对 /
+尝试太多次，稍后再试 — in the same quiet tertiary ink as everything else sync has
+to say, one line, never a banner. Regenerating makes new digits on that one
+device only, so every other device has to be given them again, and the dialog
+says so before it does it.
+
+The header's status line is the only place any of this shows: `等待设备` on a Mac
+with no peer, `已同步 HH:MM` with one and `已同步 2 台` with several,
+`1 台未连上` / `1 台配对码不对` when one is behind, and `查找中` /
+`连不上 Mac，正在重新查找` on the phone. It is one line of tertiary ink, tap-ready
+on the phone to open 连到 Mac — the address and the six digits in one sheet, the
+devices in step just under them — and it never becomes a banner, a toast or a
 progress bar. Syncing is not an activity the user performs; it is a condition they
 can check.
 
 ### Named Rules
+
+**The Every-Mac-Serves Rule.** A device listens only when something must connect
+to it. Every Mac serves and also watches, so two Macs are peers; the phone only
+watches, because its changes travel in the request it sends and the answer carries
+the other side's. A listener on a phone would be a port that has to survive the
+background for no exchange it cannot already start itself.
+
+**The One-Code Rule.** The code belongs to the board, not to the machine that
+made it. A second device adopts it once and answers to it from then on, and
+rotating it is a change every device has to be told — which is why the dialog
+asks first and says who is affected.
 
 **The Find-Don't-Remember Rule.** An address that only works until the next lease
 is not a setting. Discover the peer on every session and keep a typed address
@@ -860,11 +899,11 @@ text. A text comparison reports a change on every tick and the resulting
 `cards.set` re-renders the board under the user's finger, which reads as the app
 ignoring taps.
 
-**The Foreground Probe Rule.** A phone is not a server and must not probe like one:
-probing backs off 3 / 6 / 12 / 24 / 30 seconds while no Mac answers, and three
-things bring it straight back to three — the app returning to the foreground, a
-typed address, and finding the Mac. A radio that looks every three seconds for an
-afternoon is a radio that never sleeps.
+**The Foreground Probe Rule.** Probing backs off 3 / 6 / 12 / 24 / 30 seconds
+while no peer answers, and three things bring it straight back to three — the app
+returning to the foreground, a typed address, and finding a peer. A radio that
+looks every three seconds for an afternoon is a radio that never sleeps. It holds
+on a Mac too, now that a Mac has something to look for.
 
 **The Order-Is-Data Rule.** A column's order is a number on the card (`rank`), not
 an index in an array that the other device cannot see. A move is the midpoint

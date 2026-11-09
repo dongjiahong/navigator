@@ -1,38 +1,40 @@
-//! The board's file, and the sync service that lives inside the Mac app.
+//! The board's file, and the sync service that lives inside every Mac app.
 //!
 //! The board is a SQLite file (`board.rs`). It is the only copy: the interface
-//! loads it at launch, saves each change a moment later, and merges the phone's
-//! changes into the same rows, so there is nothing to reconcile between a
-//! "stored" board and a "shown" one.
+//! loads it at launch, saves each change a moment later, and merges another
+//! device's changes into the same rows, so there is nothing to reconcile between
+//! a "stored" board and a "shown" one.
 //!
 //! The service only exists while the app is open: the listener is a thread this
-//! crate starts, so quitting the app closes the port and the phone's next sync
-//! fails instead of talking to a stale copy.
+//! crate starts, so quitting the app closes the port and a peer's next sync
+//! fails instead of talking to a stale copy. Every Mac both serves and looks for
+//! the others; the phone only looks, because its changes travel in the requests
+//! it sends and the answer carries the Mac's.
 //!
 //! Two rules keep the merge honest:
 //!
 //! - **The newer write of each field wins.** A card is reconciled field by
-//!   field (`board::merge_cards`), so a title typed on the Mac and a 完成
-//!   pressed on the phone in the same minute both land on the card. `updatedAt`
+//!   field (`board::merge_cards`), so a title typed on one device and a 完成
+//!   pressed on another in the same minute both land on the card. `updatedAt`
 //!   is the newest field stamp, which is what orders the exchange.
-//! - **Deletes are tombstones.** A card removed on the Mac comes back as
+//! - **Deletes are tombstones.** A card removed on one device comes back as
 //!   `deleted: true` with a newer stamp, so merging cannot resurrect it; an
 //!   undo writes `deleted: false` with a newer stamp still, and that does.
 //!
-//! A device sends only what changed since the last exchange, and gets back only
-//! what it is missing: `POST /state` carries `{ cards, tags, since }` and
-//! answers with the rows stamped at or after `since`. A phone that has been
-//! alone for a day catches up in one round trip, and a keystroke on a board of a
-//! thousand cards is still a few hundred bytes on the wire.
+//! A device sends only what changed since it last told each peer, and gets back
+//! only what it is missing: `POST /state` carries `{ cards, tags, since }` and
+//! answers with the rows stamped at or after `since`. Each peer keeps its own
+//! watermark and its own backlog, so one Mac that is shut or holds a different
+//! code cannot stop the others from being in step.
 //!
-//! The phone finds the Mac the way LocalSend finds its peers: it broadcasts a
-//! probe on the network, and whoever serves the board answers with a unicast
-//! datagram. The address is read off that reply, so a Mac that moved to a new
-//! DHCP lease is found again on the next tick without anyone typing an IP.
+//! Devices find one another the way LocalSend finds its peers: each broadcasts a
+//! probe on its own network, every serving device answers with a unicast
+//! datagram, and the address is read off that answer. A Mac that moved to a new
+//! DHCP lease is found again on the next probe without anyone typing an IP.
 //!
-//! The phone also talks to the Mac on a plain socket rather than through the
-//! platform's HTTP client, because Android blocks cleartext HTTP to a LAN
-//! address by policy, and this traffic never leaves the LAN.
+//! The requests go over a plain socket rather than through the platform's HTTP
+//! client, because Android blocks cleartext HTTP to a LAN address by policy, and
+//! this traffic never leaves the LAN.
 //!
 //! The crate also owns the deadline reminders. nsh has no notification API, so
 //! the Mac's go through `UNUserNotificationCenter` here, where a due date
@@ -63,35 +65,122 @@ const MAX_BODY: usize = 4 * 1024 * 1024;
 /// The port this process listens on, once `start` has bound it.
 static BOUND: OnceLock<u16> = OnceLock::new();
 
-/// Where a phone broadcasts its probe, beside the board's own port.
+/// Where a device broadcasts its probe, beside the board's own port.
 const DISCOVERY_PORT: u16 = 8788;
-/// What a phone says to the network, and what the Mac answers with its port.
+/// What a device says to the network, and what a serving one answers with its
+/// port.
 const PROBE: &[u8] = b"NAVIGATOR/1 DISCOVER";
 const OFFER: &str = "NAVIGATOR/1 OFFER ";
-/// How long one probe waits for an answer before the next tick tries again.
-const PROBE_WAIT: Duration = Duration::from_millis(1200);
-/// How long the phone's exchange may take before the Mac is presumed gone.
+/// How long one probe collects answers: every Mac on the LAN, not the first.
+const PROBE_WAIT: Duration = Duration::from_millis(700);
+/// How often a device with peers probes again, to meet a Mac that just opened.
+const PROBE_EVERY: Duration = Duration::from_secs(15);
+/// How long one exchange may take before a peer is presumed gone.
 const EXCHANGE_WAIT: Duration = Duration::from_secs(4);
+/// How often a peer is asked what it has even when this device changed nothing.
+/// Without it a card made on one device would only reach the other the next time
+/// either of them was edited.
+const POLL_MS: u64 = 3000;
+/// How far below the newest stamp it heard a device asks from, because two
+/// devices' clocks are not the same clock.
+const MARGIN: i64 = 5 * 60 * 1000;
 
-/// The Mac this phone talks to, as `host:port`; `None` until one answers.
-static PEER: Mutex<Option<String>> = Mutex::new(None);
-/// The board the app last handed the exchange thread.
-static OUTBOX: Mutex<Option<String>> = Mutex::new(None);
-/// The merged board the exchange thread last brought back, read once.
-static INBOX: Mutex<Option<String>> = Mutex::new(None);
-/// When the last exchange succeeded, in millis since the epoch.
+/// One device's rows, as they go on the wire: the cards and tags that changed
+/// here, and nothing else.
+#[derive(Clone, Default)]
+struct Body {
+    cards: Vec<Value>,
+    tags: Vec<Value>,
+}
+
+impl Body {
+    /// A body out of a request's text. Bad JSON is an empty body: the next
+    /// offer carries the rows again, and a peer that cannot parse has nothing
+    /// this device can do about it.
+    fn from_text(text: &str) -> Body {
+        let Ok(value) = serde_json::from_str::<Value>(text) else {
+            return Body::default();
+        };
+        if value.is_array() {
+            return Body { cards: value.as_array().cloned().unwrap_or_default(), tags: Vec::new() };
+        }
+        Body {
+            cards: list_of(&value, "cards").unwrap_or_default(),
+            tags: list_of(&value, "tags").unwrap_or_default(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.cards.is_empty() && self.tags.is_empty()
+    }
+
+    /// Adds `other`, keeping the newer copy of a row: the backlog of a peer that
+    /// was away must not overwrite a row changed since it was first offered.
+    fn absorb(&mut self, other: &Body) {
+        for row in &other.cards {
+            put_newer(&mut self.cards, row);
+        }
+        for row in &other.tags {
+            put_newer(&mut self.tags, row);
+        }
+    }
+
+    fn text(&self, since: i64) -> String {
+        json!({ "cards": self.cards, "tags": self.tags, "since": since }).to_string()
+    }
+}
+
+/// Keeps `row` in `rows` unless a copy with the same id is already as new. A
+/// row without an `id` is kept as it is: it is not this device's to drop.
+fn put_newer(rows: &mut Vec<Value>, row: &Value) {
+    let stamp = |value: &Value| value.get("updatedAt").and_then(Value::as_f64).unwrap_or(0.0);
+    let Some(id) = row.get("id").and_then(Value::as_str) else {
+        rows.push(row.clone());
+        return;
+    };
+    match rows.iter_mut().find(|old| old.get("id").and_then(Value::as_str) == Some(id)) {
+        Some(old) if stamp(row) >= stamp(old) => *old = row.clone(),
+        Some(_) => {}
+        None => rows.push(row.clone()),
+    }
+}
+
+/// One other device this device stays in step with.
+struct Peer {
+    /// `host:port`, read off the discovery answer or typed by the user.
+    addr: String,
+    /// The newest stamp this peer has told us about: what it is missing starts
+    /// above it, less `MARGIN`.
+    heard: i64,
+    /// The last exchange succeeded.
+    ok: bool,
+    /// When the last exchange succeeded, in millis since the epoch; 0 for never.
+    at: u64,
+    /// The peer would not take this device's pairing code. Asking again only
+    /// spends the five attempts it allows, so it is left alone until the code
+    /// changes.
+    refused: bool,
+    /// The peer answered 429: nothing is sent to it before this moment.
+    locked_until: u64,
+    /// Typed by the user rather than found by a probe: it is kept even while it
+    /// does not answer, so a network that drops broadcasts still works.
+    typed: bool,
+    /// Rows this peer has not been given yet, after a failed exchange.
+    backlog: Body,
+}
+
+/// Every other device this one knows about. A Mac serves and discovers; a phone
+/// only discovers, but it keeps one entry per Mac it found, and syncs with each.
+static PEERS: Mutex<Vec<Peer>> = Mutex::new(Vec::new());
+/// The rows the app last handed the exchange thread, for every peer on this
+/// cycle. Each peer's own backlog carries what it missed.
+static CURRENT: Mutex<Option<Body>> = Mutex::new(None);
+/// Everything the peers have answered since the app last read it.
+static INBOX: Mutex<Option<Body>> = Mutex::new(None);
+/// When the last exchange with any peer succeeded, in millis since the epoch.
 static SYNCED_AT: AtomicU64 = AtomicU64::new(0);
-/// Whether the last exchange with a known Mac failed.
-static UNREACHABLE: Mutex<bool> = Mutex::new(false);
-/// Bumped when the app wants the exchange thread to look for the Mac again now.
+/// Bumped when the app wants the exchange thread to look for peers again now.
 static NUDGE: AtomicU64 = AtomicU64::new(0);
-/// When the Mac last refused this phone's pairing code, in millis; 0 for never.
-/// While it is set the phone stops asking: five refusals shut the Mac's door, so
-/// a phone that kept trying on its own would lock its owner out of their board.
-static REFUSED_AT: AtomicU64 = AtomicU64::new(0);
-/// The earliest moment this phone may ask again, in millis; 0 for now. Set when
-/// the Mac answers 429, and waited out in full.
-static RETRY_AT: AtomicU64 = AtomicU64::new(0);
 
 fn parse_cards(text: &str) -> Result<Vec<Value>, String> {
     let value: Value = serde_json::from_str(text).map_err(|e| format!("bad JSON: {e}"))?;
@@ -154,13 +243,8 @@ fn lan_ip() -> String {
     "127.0.0.1".to_owned()
 }
 
-/// Every directed broadcast address this device can reach, one per interface,
-/// from the interface's own address and netmask.
-///
-/// A single `255.255.255.255` leaves by the default route, which on a phone
-/// with mobile data is the carrier's, not the Wi-Fi's. Asking each interface's
-/// subnet instead is what makes the probe reach the Mac beside it.
-fn broadcast_addresses() -> Vec<Ipv4Addr> {
+/// Every IPv4 address and netmask this device holds, one pair per interface.
+fn ipv4_interfaces() -> Vec<(Ipv4Addr, Ipv4Addr)> {
     let mut out = Vec::new();
     // SAFETY: `getifaddrs` fills a list we walk, then hand back to free.
     unsafe {
@@ -173,10 +257,7 @@ fn broadcast_addresses() -> Vec<Ipv4Addr> {
             let entry = &*current;
             if let (Some(addr), Some(mask)) = (ipv4_of(entry.ifa_addr), ipv4_of(entry.ifa_netmask)) {
                 if !addr.is_loopback() && !addr.is_unspecified() {
-                    let broadcast = Ipv4Addr::from(u32::from(addr) | !u32::from(mask));
-                    if !out.contains(&broadcast) {
-                        out.push(broadcast);
-                    }
+                    out.push((addr, mask));
                 }
             }
             current = entry.ifa_next;
@@ -184,6 +265,31 @@ fn broadcast_addresses() -> Vec<Ipv4Addr> {
         libc::freeifaddrs(head);
     }
     out
+}
+
+/// Every directed broadcast address this device can reach, one per interface,
+/// from the interface's own address and netmask.
+///
+/// A single `255.255.255.255` leaves by the default route, which on a phone
+/// with mobile data is the carrier's, not the Wi-Fi's. Asking each interface's
+/// subnet instead is what makes the probe reach the Mac beside it.
+fn broadcast_addresses() -> Vec<Ipv4Addr> {
+    let mut out = Vec::new();
+    for (addr, mask) in ipv4_interfaces() {
+        let broadcast = Ipv4Addr::from(u32::from(addr) | !u32::from(mask));
+        if !out.contains(&broadcast) {
+            out.push(broadcast);
+        }
+    }
+    out
+}
+
+/// Whether an answer came from this very process: its own probe is delivered to
+/// its own discovery port, and a device that treated that as a peer would talk
+/// to itself forever.
+fn is_self(ip: Ipv4Addr, port: u16) -> bool {
+    BOUND.get().is_some_and(|bound| *bound == port)
+        && ipv4_interfaces().iter().any(|(addr, _)| *addr == ip)
 }
 
 /// The IPv4 address a `sockaddr` holds, if it holds one. Null is no address.
@@ -202,34 +308,182 @@ fn ipv4_of(address: *const libc::sockaddr) -> Option<Ipv4Addr> {
     }
 }
 
-/// Asks the network for a Mac serving the board, and returns `host:port` of
-/// the first one that answers.
-fn find_mac() -> Option<String> {
-    let socket = UdpSocket::bind(("0.0.0.0", 0)).ok()?;
-    socket.set_broadcast(true).ok()?;
+/// Asks the network for every device serving a board, and returns each one's
+/// `host:port`.
+///
+/// It collects for a moment instead of taking the first answer: two Macs on one
+/// LAN both answer, and a board that only met the quicker one would be a board
+/// half of the devices share. The answering datagram's own source is the
+/// device's address right now, whatever the lease was when it was last synced.
+fn discover() -> Vec<String> {
+    let Ok(socket) = UdpSocket::bind(("0.0.0.0", 0)) else {
+        return Vec::new();
+    };
+    socket.set_broadcast(true).ok();
     for target in broadcast_addresses() {
         let _ = socket.send_to(PROBE, (target, DISCOVERY_PORT));
     }
     let _ = socket.send_to(PROBE, (Ipv4Addr::BROADCAST, DISCOVERY_PORT));
 
     let deadline = Instant::now() + PROBE_WAIT;
+    let mut out: Vec<String> = Vec::new();
     let mut buf = [0u8; 512];
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
-            return None;
+            return out;
         }
-        socket.set_read_timeout(Some(left)).ok()?;
+        socket.set_read_timeout(Some(left)).ok();
         let Ok((read, from)) = socket.recv_from(&mut buf) else {
-            continue;
+            return out;
         };
         let text = String::from_utf8_lossy(&buf[..read]);
-        let Some(port) = text.strip_prefix(OFFER).and_then(|p| p.trim().parse::<u16>().ok()) else {
+        let Some(port) = offer_port(&text) else {
             continue;
         };
-        // The answering datagram's own source is the Mac's address right now,
-        // whatever the lease was when the phone last synced.
-        return Some(format!("{}:{port}", from.ip()));
+        let ip = match from.ip() {
+            std::net::IpAddr::V4(ip) => ip,
+            std::net::IpAddr::V6(_) => continue,
+        };
+        if is_self(ip, port) {
+            continue;
+        }
+        let addr = SocketAddr::from((ip, port)).to_string();
+        if !out.contains(&addr) {
+            out.push(addr);
+        }
+    }
+}
+
+/// The port an answer datagram names, if it is one of this protocol's answers.
+fn offer_port(text: &str) -> Option<u16> {
+    text.strip_prefix(OFFER)?.trim().parse::<u16>().ok()
+}
+
+/// Adds the devices a probe found to the ones already known, keeping what each
+/// known peer has already told us.
+fn found_peers(found: Vec<String>) {
+    let mut peers = PEERS.lock().unwrap();
+    for addr in found {
+        if peers.iter().any(|peer| peer.addr == addr) {
+            continue;
+        }
+        peers.push(Peer {
+            addr,
+            heard: 0,
+            ok: false,
+            at: 0,
+            refused: false,
+            locked_until: 0,
+            typed: false,
+            backlog: Body::default(),
+        });
+    }
+}
+
+/// Points this device at `addr` by hand, for a network that drops broadcasts.
+///
+/// A typed address is a peer like any other, kept even while it does not
+/// answer; the probe keeps running beside it, so typing one Mac's address does
+/// not hide another Mac on the same network.
+fn add_typed(addr: String) {
+    let mut peers = PEERS.lock().unwrap();
+    if let Some(peer) = peers.iter_mut().find(|peer| peer.addr == addr) {
+        peer.typed = true;
+        return;
+    }
+    // One typed address at a time: the app stores one, and a second would be a
+    // Mac the user can no longer edit away.
+    peers.retain(|peer| !peer.typed);
+    peers.push(Peer {
+        addr,
+        heard: 0,
+        ok: false,
+        at: 0,
+        refused: false,
+        locked_until: 0,
+        typed: true,
+        backlog: Body::default(),
+    });
+}
+
+/// What one cycle sends a peer: its own backlog plus what the app changed since
+/// the last cycle.
+fn body_for(addr: &str, current: Option<&Body>) -> Body {
+    let peers = PEERS.lock().unwrap();
+    let mut body = peers
+        .iter()
+        .find(|peer| peer.addr == addr)
+        .map(|peer| peer.backlog.clone())
+        .unwrap_or_default();
+    drop(peers);
+    if let Some(current) = current {
+        body.absorb(current);
+    }
+    body
+}
+
+/// The peers to try this cycle, with the state each needs: whether it is locked
+/// out, when it was last heard from, and the watermark it is asked from.
+fn targets() -> Vec<(String, i64, bool, u64, u64)> {
+    PEERS
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|peer| (peer.addr.clone(), peer.heard, peer.refused, peer.locked_until, peer.at))
+        .collect()
+}
+
+/// A peer answered and merged: remember what it has, keep nothing of the body
+/// for it, and put its answer where the app will read it.
+fn delivered(addr: &str, answer: &str) {
+    let value = serde_json::from_str::<Value>(answer).unwrap_or(Value::Null);
+    let at = value.get("at").and_then(Value::as_f64).unwrap_or(0.0) as i64;
+    let body = Body::from_text(answer);
+    {
+        let mut inbox = INBOX.lock().unwrap();
+        inbox.get_or_insert_with(Body::default).absorb(&body);
+    }
+    let mut peers = PEERS.lock().unwrap();
+    if let Some(peer) = peers.iter_mut().find(|peer| peer.addr == addr) {
+        peer.heard = peer.heard.max(at);
+        peer.ok = true;
+        peer.at = now_millis();
+        peer.refused = false;
+        peer.locked_until = 0;
+        peer.backlog = Body::default();
+    }
+    SYNCED_AT.store(now_millis(), Ordering::Relaxed);
+}
+
+/// A peer would not take this device's code, or asked it to wait. The body goes
+/// back into the peer's own backlog: none of it was merged.
+fn refused_by(addr: &str, locked: bool, retry: u64, sent: Body) {
+    let until = if locked { now_millis() + retry.max(1) * 1000 } else { 0 };
+    let mut peers = PEERS.lock().unwrap();
+    if let Some(peer) = peers.iter_mut().find(|peer| peer.addr == addr) {
+        peer.ok = false;
+        peer.backlog = sent;
+        if locked {
+            peer.locked_until = until;
+        } else {
+            peer.refused = true;
+        }
+    }
+}
+
+/// A peer did not answer. A discovered one is forgotten so the next probe finds
+/// it again (at whatever address it took); a typed one is kept, because that is
+/// the one address the user gave.
+fn lost(addr: &str, sent: Body) {
+    let mut peers = PEERS.lock().unwrap();
+    if let Some(index) = peers.iter().position(|peer| peer.addr == addr) {
+        if peers[index].typed {
+            peers[index].ok = false;
+            peers[index].backlog = sent;
+        } else {
+            peers.remove(index);
+        }
     }
 }
 
@@ -309,14 +563,15 @@ fn request(
     Ok((status, body.to_owned()))
 }
 
-/// What one exchange with the Mac came to.
+/// What one exchange with a peer came to.
 enum Exchange {
-    /// The Mac merged the board and answered with what this phone was missing.
+    /// The peer merged the rows and answered with what this device was missing.
     Merged(String),
-    /// The Mac answered and would not let this phone in; `locked` when it is
-    /// rate-limited rather than merely unconvinced by the code.
-    Refused { locked: bool },
-    /// The Mac did not answer at all, or answered something that is not an
+    /// The peer answered and would not let this device in; `locked` when it is
+    /// rate-limited rather than merely unconvinced by the code, and `retry` the
+    /// seconds it named.
+    Refused { locked: bool, retry: u64 },
+    /// The peer did not answer at all, or answered something that is not an
     /// exchange. Nothing in the app can do anything about it but try again.
     Missing,
 }
@@ -339,9 +594,9 @@ fn post_state(base: &str, body: &str) -> Exchange {
         Err(_) => return Exchange::Missing,
     };
     let Some(proof) = auth::signed(&nonce) else {
-        // No code on this phone: nothing to prove, so there is nothing to ask
-        // for. The Mac would answer 401, and five of those shut its door.
-        return Exchange::Refused { locked: false };
+        // No code on this device: nothing to prove, so there is nothing to ask
+        // for. The peer would answer 401, and five of those shut its door.
+        return Exchange::Refused { locked: false, retry: 0 };
     };
     let signed = [
         (auth::NONCE_HEADER, nonce.as_str()),
@@ -349,16 +604,25 @@ fn post_state(base: &str, body: &str) -> Exchange {
     ];
     match request(&address, "POST", "/state", body, &signed) {
         Ok((200, text)) => Exchange::Merged(text),
-        Ok((401, _)) => Exchange::Refused { locked: false },
-        Ok((429, _)) => Exchange::Refused { locked: true },
+        Ok((401, _)) => Exchange::Refused { locked: false, retry: 0 },
+        Ok((429, text)) => Exchange::Refused { locked: true, retry: retry_in(&text) },
         Ok(_) | Err(_) => Exchange::Missing,
     }
 }
 
-/// How long the phone waits before probing again, after `missed` probes in a row
-/// found no Mac.
+/// How many seconds a peer asked this device to wait, out of a 429 body. The
+/// lock is the peer's own minute, so a missing or odd answer gets that.
+fn retry_in(text: &str) -> u64 {
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|value| value.get("retry").and_then(Value::as_u64))
+        .unwrap_or(auth::LOCK.as_secs())
+}
+
+/// How long to wait before probing again, after `missed` cycles in a row found
+/// no peer that answered.
 ///
-/// Three seconds while someone is probably in the room — the Mac may be starting
+/// Three seconds while someone is probably in the room — a Mac may be starting
 /// up, or the phone may have just joined the network — then doubling to half a
 /// minute. Away from home the phone sits on a network with no Mac on it at all,
 /// and a probe every three seconds for an afternoon is a radio that never sleeps.
@@ -367,116 +631,106 @@ fn probe_backoff(missed: u32) -> Duration {
     Duration::from_secs(SECONDS[(missed as usize).min(SECONDS.len() - 1)])
 }
 
-/// The phone's side: find the Mac, exchange boards, keep the last answer.
+/// This device's side of the mesh: find every serving device, exchange boards
+/// with each of them, and keep what they answer.
+///
+/// Each peer has its own watermark and its own backlog, so one Mac that is down
+/// or holds a different code cannot stop the others from being in step. The
+/// merge makes the exchange safe to repeat: it is per field, by stamp, and a
+/// tombstone is a value, so the same rows may cross as often as they like.
 fn exchange_loop() {
-    // How long the last run of failed probes has been, and which nudge was the
-    // last one answered: a nudge is the app saying "look now".
-    let mut missed = 0_u32;
+    // Which nudge was answered, and how many cycles in a row found nobody: a
+    // nudge is the app saying "look now", and a quiet network is waited out
+    // rather than hammered.
     let mut seen_nudge = NUDGE.load(Ordering::Relaxed);
+    let mut missed = 0_u32;
+    let mut probed_at: u64 = 0;
     loop {
         let nudge = NUDGE.load(Ordering::Relaxed);
         if nudge != seen_nudge {
             seen_nudge = nudge;
             missed = 0;
+            probed_at = 0;
         }
-        // An unpaired phone stays quiet: it has nothing to prove, and every
-        // attempt it made would count against the Mac's five. Waiting here is
+        // An unpaired device stays quiet: it has nothing to prove, and every
+        // attempt it made would count against a peer's five. Waiting here is
         // the app saying "pair me", and pairing nudges the thread awake.
         if !auth::has_prover() {
             wait_for_nudge(Duration::from_secs(2), &mut seen_nudge);
             continue;
         }
-        let peer = {
-            let known = PEER.lock().unwrap().clone();
-            known.or_else(|| {
-                let found = find_mac();
-                if found.is_some() {
-                    *PEER.lock().unwrap() = found.clone();
-                }
-                found
-            })
-        };
-        let Some(peer) = peer else {
-            // Nothing answered: wait longer next time, unless the app fills the
-            // wait with a nudge.
-            wait_for_nudge(probe_backoff(missed), &mut seen_nudge);
+        // Probe when nothing is known, and now and then while something is, so
+        // a Mac opened later is met without the radio looking constantly.
+        let known = PEERS.lock().unwrap().len();
+        let due = known == 0
+            || probed_at == 0
+            || now_millis().saturating_sub(probed_at) >= PROBE_EVERY.as_millis() as u64;
+        if due {
+            found_peers(discover());
+            probed_at = now_millis();
+        }
+        let targets = targets();
+        if targets.is_empty() {
             missed = missed.saturating_add(1);
-            continue;
-        };
-        // There is a Mac: the next probe is three seconds away again.
-        missed = 0;
-        // A refusal is the user's to fix, not the loop's: the Mac would not take
-        // this phone's code, and asking again only spends the five attempts it
-        // allows before shutting the door on its owner. Nothing is sent until
-        // the code changes — and the changes waiting in the outbox stay there.
-        if REFUSED_AT.load(Ordering::Relaxed) != 0 {
-            wait_for_nudge(Duration::from_secs(2), &mut seen_nudge);
+            wait_for_nudge(probe_backoff(missed), &mut seen_nudge);
             continue;
         }
-        // A Mac that answered 429 named the wait, and the whole of it is kept:
-        // nudges do not shorten another app's lockout.
-        let retry = RETRY_AT.load(Ordering::Relaxed);
-        let now = now_millis();
-        if retry > now {
-            thread::sleep(Duration::from_millis((retry - now).min(1000)));
-            continue;
-        }
-        // Taking the body, not copying it: a body the Mac answered is done with,
-        // and re-sending it would re-send the same changes every 1.5 seconds for
-        // as long as the app is open.
-        let body = OUTBOX.lock().unwrap().take();
-        let Some(body) = body else {
-            thread::sleep(Duration::from_millis(400));
-            continue;
-        };
-        match post_state(&peer, &body) {
-            Exchange::Merged(merged) => {
-                *INBOX.lock().unwrap() = Some(merged);
-                *UNREACHABLE.lock().unwrap() = false;
-                REFUSED_AT.store(0, Ordering::Relaxed);
-                RETRY_AT.store(0, Ordering::Relaxed);
-                SYNCED_AT.store(now_millis(), Ordering::Relaxed);
+        // Taking the body, not copying it: a body a peer answered is done with,
+        // and every peer that did not answer keeps it in its own backlog.
+        let current = CURRENT.lock().unwrap().take();
+        let mut any_ok = false;
+        let mut attempted = 0_u32;
+        for (addr, heard, refused, locked_until, at) in targets {
+            // A refusal is the user's to fix, not the loop's, and a lockout is
+            // waited out in full: asking again spends attempts that belong to
+            // the device's owner.
+            if refused || locked_until > now_millis() {
+                continue;
             }
-            Exchange::Refused { locked } => {
-                // The Mac answered, so it is there: what failed is the code,
-                // and forgetting the address would only send the phone looking
-                // for a Mac it has already found. The body goes back — none of
-                // it was merged.
-                put_back(body);
-                if locked {
-                    RETRY_AT.store(now_millis() + auth::LOCK.as_millis() as u64, Ordering::Relaxed);
-                } else {
-                    REFUSED_AT.store(now_millis(), Ordering::Relaxed);
+            let send = body_for(&addr, current.as_ref());
+            // Nothing to say, and this peer was heard from a moment ago: asking
+            // again would be a request every cycle for no news.
+            if send.is_empty() && now_millis().saturating_sub(at) < POLL_MS {
+                continue;
+            }
+            attempted += 1;
+            let since = (heard - MARGIN).max(0);
+            match post_state(&addr, &send.text(since)) {
+                Exchange::Merged(answer) => {
+                    any_ok = true;
+                    delivered(&addr, &answer);
                 }
-            }
-            Exchange::Missing => {
-                // The Mac may have gone to sleep or taken a new address: drop
-                // what we knew so the next tick probes for it again. The body
-                // goes back, unless a newer one was offered meanwhile — those
-                // changes must reach the Mac even though this attempt failed.
-                put_back(body);
-                *PEER.lock().unwrap() = None;
-                *UNREACHABLE.lock().unwrap() = true;
+                Exchange::Refused { locked, retry } => refused_by(&addr, locked, retry, send),
+                Exchange::Missing => lost(&addr, send),
             }
         }
-        thread::sleep(Duration::from_millis(1500));
-    }
-}
-
-/// Hands an unanswered body back to the exchange thread, unless the app has
-/// offered a newer one meanwhile: those changes have to reach the Mac too.
-fn put_back(body: String) {
-    let mut outbox = OUTBOX.lock().unwrap();
-    if outbox.is_none() {
-        *outbox = Some(body);
+        if attempted == 0 {
+            // Every peer is locked out or was just heard from and there was
+            // nothing new to say: look again shortly, don't back off.
+            wait_for_nudge(Duration::from_millis(700), &mut seen_nudge);
+            continue;
+        }
+        if any_ok {
+            missed = 0;
+        } else {
+            // Nothing answered: probe again before the next try, so a peer that
+            // took a new lease is found rather than retried at an old address.
+            missed = missed.saturating_add(1);
+            probed_at = 0;
+        }
+        if any_ok {
+            wait_for_nudge(Duration::from_millis(1500), &mut seen_nudge);
+        } else {
+            wait_for_nudge(probe_backoff(missed), &mut seen_nudge);
+        }
     }
 }
 
 /// Sleeps for `wait`, unless the app nudges the exchange thread first.
 ///
-/// In slices rather than one long sleep: a nudge means the phone is back in
-/// front of its owner, and waiting out the rest of a thirty-second backoff would
-/// make the wake-up late for nothing. Thirty slices is no cost at all.
+/// In slices rather than one long sleep: a nudge means the app is back in front
+/// of the user, and waiting out the rest of a thirty-second backoff would make
+/// the wake-up late for nothing. Thirty slices is no cost at all.
 fn wait_for_nudge(wait: Duration, seen: &mut u64) {
     const SLICE: Duration = Duration::from_millis(250);
     let mut left = wait;
@@ -823,11 +1077,12 @@ impl Sync {
         format!("http://{}:{}", lan_ip(), port)
     }
 
-    /// Starts this device looking for a Mac, and keeps exchanging boards.
+    /// Starts this device looking for the others, and keeps exchanging boards.
     ///
     /// Nothing here touches the network on the caller's thread: the work
-    /// happens in a thread of its own, which is why the phone's interface
-    /// never stalls while a Mac is asleep.
+    /// happens in a thread of its own, which is why the interface never stalls
+    /// while a peer is asleep. A Mac both serves and watches; a phone only
+    /// watches, because its changes reach a peer in the request it sends.
     pub fn watch() {
         static WATCHING: OnceLock<()> = OnceLock::new();
         if WATCHING.set(()).is_ok() {
@@ -835,60 +1090,104 @@ impl Sync {
         }
     }
 
-    /// Hands the exchange thread the board to push; it keeps the latest.
+    /// Hands the exchange thread the rows that changed here; it carries them to
+    /// every peer this cycle, and a peer that does not answer keeps its own copy
+    /// until it does.
     pub fn offer(cards_json: String) {
-        *OUTBOX.lock().unwrap() = Some(cards_json);
+        let fresh = Body::from_text(&cards_json);
+        if fresh.is_empty() {
+            return;
+        }
+        let mut current = CURRENT.lock().unwrap();
+        match current.as_mut() {
+            Some(pending) => pending.absorb(&fresh),
+            None => *current = Some(fresh),
+        }
     }
 
-    /// The board the Mac merged in last, once; empty when nothing is new.
+    /// Everything the peers have answered since this was last read; empty when
+    /// nothing is new.
     pub fn inbox() -> String {
-        INBOX.lock().unwrap().take().unwrap_or_default()
+        INBOX.lock().unwrap().take().map(|body| body.text(0)).unwrap_or_default()
     }
 
-    /// Where sync stands, as JSON: the Mac in use, whether it answered last
-    /// time, and when it last did (millis since the epoch; 0 for never).
+    /// Where sync stands, as JSON.
+    ///
+    /// `peers` is one entry per device this one is in step with: its address,
+    /// whether the last exchange worked, when it last did, and what its code is
+    /// doing. The top-level `pair` is the one thing worth saying about the code
+    /// across all of them, and `unreachable` says no peer answered at all.
     pub fn status() -> String {
-        let peer = PEER.lock().unwrap().clone().unwrap_or_default();
+        let peers = PEERS.lock().unwrap();
         let now = now_millis();
-        let retry = RETRY_AT.load(Ordering::Relaxed);
+        let any_ok = peers.iter().any(|peer| peer.ok);
+        let refused = peers.iter().any(|peer| peer.refused);
+        let retry = peers.iter().map(|peer| peer.locked_until).max().unwrap_or(0);
         let locked = retry > now;
         // Why an exchange is not happening, in one word the app can draw:
-        // `need` — this phone has no code yet; `locked` — the Mac asked it to
-        // wait; `wrong` — the Mac did not take the code; `ok` — nothing in the
-        // way. A lock outranks a refusal: both are true, and only one is advice
-        // the user can act on.
+        // `need` — this device has no code yet; `wrong` — a peer did not take
+        // the code; `locked` — a peer asked it to wait; `ok` — nothing in the
+        // way. A refusal is said only when no peer is in step: a code that is
+        // wrong for a second Mac must not hide a board that is syncing with the
+        // first, and the sheet names the peer that needs it.
         let pair = if !auth::has_prover() {
             "need"
-        } else if locked {
-            "locked"
-        } else if REFUSED_AT.load(Ordering::Relaxed) != 0 {
+        } else if refused && !any_ok {
             "wrong"
+        } else if locked && !any_ok {
+            "locked"
         } else {
             "ok"
         };
+        let list: Vec<Value> = peers
+            .iter()
+            .map(|peer| {
+                let state = if peer.refused {
+                    "wrong"
+                } else if peer.locked_until > now {
+                    "locked"
+                } else {
+                    "ok"
+                };
+                json!({
+                    "addr": peer.addr,
+                    "ok": peer.ok,
+                    "at": peer.at,
+                    "typed": peer.typed,
+                    "pair": state,
+                    // Seconds left of this peer's lockout, rounded up so a
+                    // client never comes back a moment early.
+                    "retry": if peer.locked_until > now {
+                        (peer.locked_until - now).div_ceil(1000)
+                    } else {
+                        0
+                    },
+                })
+            })
+            .collect();
         json!({
-            "peer": peer,
-            "unreachable": *UNREACHABLE.lock().unwrap(),
+            "peer": peers.first().map(|peer| peer.addr.clone()).unwrap_or_default(),
+            "peers": list,
+            "unreachable": !peers.is_empty() && !any_ok,
             "at": SYNCED_AT.load(Ordering::Relaxed),
             "pair": pair,
-            // Seconds left of the Mac's lockout, rounded up so a client never
-            // comes back a moment early and starts the minute again.
             "retry": if locked { (retry - now).div_ceil(1000) } else { 0 },
         })
         .to_string()
     }
 
-    /// Syncs with `address` from now on, instead of whatever answers a probe.
+    /// Adds a device to sync with by hand, for a network that drops broadcasts.
+    ///
+    /// The probe keeps running beside it: a typed address is the fallback for
+    /// the network, not a decision to ignore the other Macs on it.
     pub fn use_address(address: String) {
-        let address = socket_address(&address);
-        *PEER.lock().unwrap() = Some(address);
-        *UNREACHABLE.lock().unwrap() = false;
-        // An address is as good as a sighting: probe at it now, and from the
-        // start of the backoff rather than from wherever it had grown to.
+        add_typed(socket_address(&address));
+        // An address is as good as a sighting: try it now, and from the start
+        // of the backoff rather than from wherever it had grown to.
         NUDGE.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Looks for the Mac again now, and at the start of the backoff.
+    /// Looks for the other devices again now, and at the start of the backoff.
     ///
     /// The app calls it when it comes back to the front: the phone has been in a
     /// pocket, walking out of one network and into another, while the thread
@@ -898,7 +1197,7 @@ impl Sync {
         NUDGE.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Adopts `code` as the six digits this Mac answers to.
+    /// Adopts `code` as the six digits this device answers to.
     ///
     /// The app keeps the digits (one key in the device's own storage) and hands
     /// them back at launch: the board's file is the user's work, and its tables
@@ -915,7 +1214,7 @@ impl Sync {
     /// Makes a new pairing code, adopts it, and returns it for the app to keep.
     ///
     /// Everything the old code opened closes with it: the challenges handed out
-    /// for it are gone and its lockout is cleared, so the phone that guessed
+    /// for it are gone and its lockout is cleared, so a device that guessed
     /// wrong can try again — with the new digits, which it has to be given.
     pub fn new_code() -> Result<String, String> {
         let code = auth::new_code()?;
@@ -923,17 +1222,19 @@ impl Sync {
         Ok(code)
     }
 
-    /// Adopts `code` as the one this phone proves it knows; `""` forgets the
+    /// Adopts `code` as the one this device proves it knows; `""` forgets the
     /// one it had, which is what a launch with nothing in storage hands over.
     pub fn set_code(code: String) -> Result<(), String> {
         if !code.is_empty() && !auth::is_code(&code) {
             return Err("a pairing code is six digits".to_owned());
         }
         auth::set_prover(&code);
-        // A new code is a new attempt: the refusal and the lockout belonged to
+        // A new code is a new attempt: every refusal and lockout belonged to
         // the old digits. The exchange thread is woken so it tries them now.
-        REFUSED_AT.store(0, Ordering::Relaxed);
-        RETRY_AT.store(0, Ordering::Relaxed);
+        for peer in PEERS.lock().unwrap().iter_mut() {
+            peer.refused = false;
+            peer.locked_until = 0;
+        }
         NUDGE.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -1761,5 +2062,115 @@ mod tests {
         } else {
             assert_eq!(Dock::badge(), "");
         }
+    }
+
+    #[test]
+    fn an_answer_is_read_as_the_port_it_names() {
+        // What a serving device sends, and what is ignored: a stray datagram on
+        // the discovery port, an older protocol, or a port that is not one.
+        assert_eq!(offer_port("NAVIGATOR/1 OFFER 8787"), Some(8787));
+        assert_eq!(offer_port("NAVIGATOR/1 OFFER 8787\n"), Some(8787));
+        assert_eq!(offer_port("NAVIGATOR/1 DISCOVER"), None);
+        assert_eq!(offer_port("NAVIGATOR/2 OFFER 8787"), None);
+        assert_eq!(offer_port("NAVIGATOR/1 OFFER 99999"), None);
+    }
+
+    #[test]
+    fn a_body_keeps_the_newer_copy_of_each_row() {
+        let row = |id: &str, stamp: f64| json!({ "id": id, "title": stamp, "updatedAt": stamp });
+        let mut body = Body::from_text(
+            &json!({ "cards": [row("a", 10.0), row("b", 20.0)], "tags": [] }).to_string(),
+        );
+        // The backlog of a peer that was away meets a row changed since: the
+        // newer copy wins, and the rows the second body does not name stay.
+        body.absorb(&Body::from_text(
+            &json!({ "cards": [row("a", 30.0), row("c", 5.0)], "tags": [] }).to_string(),
+        ));
+        let ids: Vec<&str> =
+            body.cards.iter().filter_map(|card| card["id"].as_str()).collect();
+        assert_eq!(ids, ["a", "b", "c"]);
+        assert_eq!(body.cards[0]["title"], 30.0);
+        assert_eq!(body.cards[1]["title"], 20.0);
+
+        // An older copy does not overwrite a newer one.
+        body.absorb(&Body::from_text(
+            &json!({ "cards": [row("a", 1.0)], "tags": [] }).to_string(),
+        ));
+        assert_eq!(body.cards[0]["title"], 30.0);
+    }
+
+    #[test]
+    fn a_wire_body_is_read_as_cards_and_tags() {
+        let body = Body::from_text(
+            &json!({ "cards": [{"id": "a"}], "tags": [{"id": "t"}], "since": 7 }).to_string(),
+        );
+        assert_eq!(body.cards.len(), 1);
+        assert_eq!(body.tags.len(), 1);
+        // A body that is a bare array is a peer that predates tags, and a body
+        // that does not parse carries nothing rather than failing the cycle.
+        let old = Body::from_text(&json!([{"id": "a"}]).to_string());
+        assert_eq!(old.cards.len(), 1);
+        assert!(old.tags.is_empty());
+        assert!(Body::from_text("not json").cards.is_empty());
+        // What goes back out drops `since`: each peer is asked from its own
+        // watermark, which the loop puts in.
+        let text: Value = serde_json::from_str(&body.text(42)).unwrap();
+        assert_eq!(text["since"], 42);
+        assert_eq!(text["cards"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_lockout_is_waited_out_in_full() {
+        // The peer names its own wait; an answer without one gets the crate's
+        // minute, which is the lock the service actually keeps.
+        assert_eq!(retry_in("{\"error\":\"too many attempts\",\"retry\":37}"), 37);
+        assert_eq!(retry_in("{}"), auth::LOCK.as_secs());
+        assert_eq!(retry_in("not json"), auth::LOCK.as_secs());
+    }
+
+    #[test]
+    fn the_peer_list_says_which_device_is_behind() {
+        // The prover is process-wide, and this is the only test that looks at
+        // the peer table; it leaves both as it found them.
+        auth::set_prover("482913");
+        let peer = |addr: &str, ok: bool, refused: bool, typed: bool| Peer {
+            addr: addr.to_owned(),
+            heard: 0,
+            ok,
+            at: 0,
+            refused,
+            locked_until: 0,
+            typed,
+            backlog: Body::default(),
+        };
+        {
+            let mut peers = PEERS.lock().unwrap();
+            peers.clear();
+            peers.push(peer("10.0.0.5:8787", true, false, false));
+            peers.push(peer("10.0.0.6:8787", false, true, true));
+        }
+
+        // One Mac in step and one that will not take the code: the board is
+        // syncing, so the refusal must not hide it — the list names the Mac.
+        let status: Value = serde_json::from_str(&Sync::status()).unwrap();
+        assert_eq!(status["peers"].as_array().unwrap().len(), 2);
+        assert_eq!(status["unreachable"], false);
+        assert_eq!(status["pair"], "ok");
+        assert_eq!(status["peers"][0]["addr"], "10.0.0.5:8787");
+        assert_eq!(status["peers"][0]["pair"], "ok");
+        assert_eq!(status["peers"][1]["pair"], "wrong");
+        assert_eq!(status["peers"][1]["typed"], true);
+
+        // With every known peer failing, "unreachable" is the truth, and the
+        // code is the thing to say first.
+        {
+            let mut peers = PEERS.lock().unwrap();
+            peers[0].ok = false;
+        }
+        let status: Value = serde_json::from_str(&Sync::status()).unwrap();
+        assert_eq!(status["unreachable"], true);
+        assert_eq!(status["pair"], "wrong");
+
+        PEERS.lock().unwrap().clear();
     }
 }

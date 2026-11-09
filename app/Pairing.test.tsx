@@ -121,6 +121,35 @@ test("Cmd+K reaches the code too", async () => {
   expect(shownCode(app)).not.toBe("");
 });
 
+test("a second Mac joins the first one's board by taking its code", async () => {
+  const { app, desktop } = await openApp();
+  if (!desktop) return;
+
+  await app.press("id:pair-code-open");
+  await app.waitFor("id:pair-code-digits");
+  const before = shownCode(app);
+  // A half code is not a press: the button keeps its shape but its
+  // accessibility state says it cannot fire, and the press never lands.
+  await app.type("id:pair-adopt", "73027");
+  await app.wait(200);
+  await expect(app.press("id:pair-adopt-save")).rejects.toMatchObject({
+    code: "ERR_NSH_TEST_DISABLED",
+  });
+  expect(app.storage()["navigator.pairCode"]).toBe(before.replace(" ", ""));
+
+  // The sixth digit, and the panel's digits are the other device's.
+  await app.type("id:pair-adopt", "1");
+  await app.wait(200);
+  await app.press("id:pair-adopt-save");
+
+  // The digits on screen are now the other device's, and so are the ones the
+  // device keeps: a second Mac serves the first one's board, not a copy of its
+  // own under another code.
+  await app.waitUntil(() => shownCode(app) === "730 271", { timeout: 4000 });
+  expect(app.storage()["navigator.pairCode"]).toBe("730271");
+  expect(before).not.toBe("730 271");
+});
+
 test("a phone that has never been given the digits says so", async () => {
   const app = await openSized(390, 844, { storage: SYNC_ON });
   if (!app) return;

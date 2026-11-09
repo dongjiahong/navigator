@@ -66,8 +66,8 @@ import {
 import { fieldHeight } from "./text";
 import { hueColor, onFill, theme, onAccentFill, onAccentWash, TYPE } from "./theme";
 import { dismissDue, dueNow } from "./reminders";
-import { connectTo, detail, endpoint, pairLine, pairWith, phase, start, statusLine, syncNow } from "./sync";
-import { canPair, digits, pairCode } from "./pairing";
+import { connectTo, detail, endpoint, pairLine, pairWith, peers, phase, start, statusLine, syncNow } from "./sync";
+import { canPair, digits, pairCode, peerLine } from "./pairing";
 
 const active = signal<Status>("todo");
 const openId = signal<string | null>(null);
@@ -1120,7 +1120,7 @@ function LinkSheet() {
         </View>
         <Text style={{ fontSize: 17, fontWeight: "600", color: theme().text }}>连到 Mac</Text>
         <Text style={{ fontSize: 13, lineHeight: 19, color: theme().textSecondary }}>
-          在 Mac 标题栏的「配对码」里找到 6 位数字。同一个 Wi-Fi 下会自动找到 Mac，只要对一次。
+          在 Mac 标题栏的「配对码」里找到 6 位数字。同一个 Wi-Fi 下会自动找到每一台 Mac，只要对一次。
         </Text>
         <Input
           testID="link-code"
@@ -1165,6 +1165,38 @@ function LinkSheet() {
             padding: 0,
           }}
         />
+        {/* Every Mac this phone is in step with. With one Mac the header's line
+            says everything; with two, this is the only place that can say which
+            one is behind. */}
+        <If when={peers().length > 0}>
+          <View style={{ height: 1, backgroundColor: theme().hairline }} />
+          <Text style={{ fontSize: 11.5, fontWeight: "600", color: theme().textTertiary, letterSpacing: 0.3 }}>
+            设备
+          </Text>
+          {peers().map((peer) => (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Text
+                style={{
+                  flex: 1,
+                  fontSize: 12.5,
+                  color: theme().textSecondary,
+                  fontVariant: ["tabular-nums"],
+                }}
+              >
+                {peer.addr}
+              </Text>
+              <Text
+                testID={`link-peer-${peer.addr}`}
+                style={{
+                  fontSize: 12.5,
+                  color: peer.ok ? theme().textTertiary : theme().danger,
+                }}
+              >
+                {peerLine(peer)}
+              </Text>
+            </View>
+          ))}
+        </If>
         {detail() ? (
           <Text style={{ fontSize: 12.5, color: phase() === "error" ? theme().danger : theme().textTertiary }}>
             {detail()}

@@ -133,7 +133,7 @@ fn the_board_answers_only_a_phone_that_knows_the_code() {
 
     // And the phone hears which of the two it was: a lockout, not a wrong code.
     auth::set_prover("000001");
-    assert!(matches!(post_state(&base, BOARD), Exchange::Refused { locked: true }));
+    assert!(matches!(post_state(&base, BOARD), Exchange::Refused { locked: true, .. }));
 
     // The owner's next move is a new code. It opens the door again, and the
     // digits the phone still holds are out — which is the whole point of it.
@@ -141,10 +141,76 @@ fn the_board_answers_only_a_phone_that_knows_the_code() {
     auth::set_prover(CODE);
     assert!(matches!(
         post_state(&base, BOARD),
-        Exchange::Refused { locked: false }
+        Exchange::Refused { locked: false, .. }
     ));
     auth::set_prover("730271");
     assert!(matches!(post_state(&base, BOARD), Exchange::Merged(_)));
+}
+
+/// The exchange thread with a peer it was pointed at: the whole path a second
+/// Mac takes, from a typed address to a row in the inbox and a peer in `status`.
+///
+/// It starts the process-wide exchange thread and writes to the board, so it is
+/// `#[ignore]`d and run on its own, like the exchange above:
+///
+/// ```text
+/// cargo test --offline the_exchange_thread_syncs_with_a_typed_peer -- --ignored --test-threads=1
+/// ```
+#[test]
+#[ignore = "starts the exchange thread and writes to the board; run it alone"]
+fn the_exchange_thread_syncs_with_a_typed_peer() {
+    use crate::{Sync, board};
+
+    board::open("").expect("a board in memory");
+    board::with(|db| board::clear(&db.conn)).expect("an empty board");
+    let port = serve();
+    let code = "735091";
+    auth::serving().set_code(code);
+    auth::set_prover(code);
+
+    // A Mac met by hand: the fallback a network without broadcasts needs. It
+    // is a peer like any other once it answers.
+    Sync::use_address(format!("127.0.0.1:{port}"));
+    Sync::set_code(code.to_owned()).expect("the code");
+    Sync::watch();
+
+    let card = serde_json::json!({
+        "id": "typed-peer-1", "title": "从另一台 Mac 来", "notes": "", "tags": [],
+        "status": "todo", "updatedAt": now_millis_for_test(),
+    });
+    Sync::offer(serde_json::json!({ "cards": [card], "tags": [] }).to_string());
+
+    // The thread works on its own clock; wait for it rather than assume it.
+    let mut inbox = String::new();
+    for _ in 0..200 {
+        inbox = Sync::inbox();
+        if inbox.contains("typed-peer-1") {
+            break;
+        }
+        thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(inbox.contains("typed-peer-1"), "the peer's answer reached the inbox: {inbox}");
+
+    // The peer the user typed is now one the device is in step with, and the
+    // board really has the card: the server merged it before it answered.
+    let status: Value = serde_json::from_str(&Sync::status()).expect("a status body");
+    let peers = status["peers"].as_array().expect("a peer list");
+    assert_eq!(peers.len(), 1, "one typed peer: {status}");
+    assert_eq!(peers[0]["addr"], format!("127.0.0.1:{port}"));
+    assert_eq!(peers[0]["ok"], true, "the exchange succeeded: {status}");
+    assert_eq!(peers[0]["typed"], true);
+    assert_eq!(status["pair"], "ok");
+
+    let board = board::with(|db| board::all(&db.conn)).expect("the board");
+    assert!(board.contains("从另一台 Mac 来"), "the rows crossed: {board}");
+}
+
+/// The wall clock in millis, as a card's stamp.
+fn now_millis_for_test() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(1)
 }
 
 /// The phone's whole side against the Mac's whole side, with a board that really
@@ -176,7 +242,7 @@ fn sync_with_the_code() {
 
     // The wrong code: refused, and the Mac's board is untouched.
     auth::set_prover("000000");
-    assert!(matches!(post_state(&base, &body), Exchange::Refused { locked: false }));
+    assert!(matches!(post_state(&base, &body), Exchange::Refused { locked: false, .. }));
     let board = crate::board::with(|db| crate::board::all(&db.conn)).expect("the board");
     assert!(!board.contains("phone-1"), "a wrong code must move no card");
 
