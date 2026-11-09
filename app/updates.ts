@@ -43,13 +43,25 @@ function canUpdate(): boolean {
   }
 }
 
-/** The build this run's code is, for the status line. */
+/**
+ * The version and build this run's code is, for the status line.
+ *
+ * The shell's own pair is the installed APK's; a downloaded package's is what
+ * runs instead, and that is the code the user is looking at. The build alone
+ * said nothing a person can match against a release; the version is the name
+ * the release carries.
+ */
 function runningLabel(): string {
+  const label = (version: string | null | undefined, build: number | null | undefined): string => {
+    if (version && build) return `${version} (build ${build})`;
+    if (version) return version;
+    return build ? `build ${build}` : "";
+  };
   try {
     const running = runningPackage();
-    if (running) return `build ${running.build}`;
+    if (running) return label(running.version, running.build);
     const shell = shellInfo();
-    return shell.build ? `build ${shell.build}` : "";
+    return label(shell.version, shell.build);
   } catch {
     return "";
   }
@@ -81,8 +93,8 @@ export async function checkUpdates(): Promise<void> {
     const found = await checkForPackage();
     if (!found) {
       updateState.set("current");
-      const build = runningLabel();
-      updateLine.set(build ? `已是最新版本（${build}）` : "已是最新版本");
+      const version = runningLabel();
+      updateLine.set(version ? `已是最新版本，${version}` : "已是最新版本");
       return;
     }
     updateReady.set(found);

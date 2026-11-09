@@ -36,7 +36,7 @@ nsh 0.4.0 没有任何通知 API。App 现在把 nsh 固定到 main 的 `36b9168
 
 **Android：App 打开时能发系统通知。** nsh main 增加了 `Notifications`，`nsh package` 在 App 可以通知时会往 manifest 写 `POST_NOTIFICATIONS`（不声明 `capabilities` 的独立 App 默认拥有这项能力）。`reminders.ts` 在 Android 上读取/请求通知权限；App 每 20 秒检查一次「五分钟内刚到期」的卡，有权限就发一条 `id` 为 `navigator.card.<卡片 id>` 的系统通知，标题是「到时间了：…」，点通知会打开手机的卡片详情页。权限被拒或平台发不了时，仍然退回列表上方的横幅（「打开」/「知道了」）。手机「连到 Mac」Sheet 里新增了「通知」一栏：一行显示当前权限状态，旁边「测试」按钮会请求权限并发一条「通知测试」，不用等到某个截止时间。
 
-**通知开关是灰色时先确认安装包。** 本仓库打出的 `0.1.5 (build 5)` APK 的 manifest 里同时有 `INTERNET` 和 `POST_NOTIFICATIONS`；旧包没有后者，Android 13+ 的通知页就会把开关画成灰的、点不动。用 `app/.nsh/out/Navigator.apk` 覆盖安装（`adb install -r`，保留数据），再打开 App 看「连到 Mac → 通知」。如果版本已经是 0.1.5 但开关仍灰，检查这台手机上领航是不是被停用、被工作资料/家长控制限制，或装在另一个用户下；用下面的命令能看到实际装的是哪个包、有没有声明权限：
+**通知开关是灰色时先确认安装包。** 本仓库打出的 `0.1.6 (build 7)` APK 的 manifest 里同时有 `INTERNET` 和 `POST_NOTIFICATIONS`；旧包没有后者，Android 13+ 的通知页就会把开关画成灰的、点不动。用 `app/.nsh/out/Navigator.apk` 覆盖安装（`adb install -r`，保留数据），再打开 App 看「连到 Mac → 通知」。如果版本已经是 0.1.6 但开关仍灰，检查这台手机上领航是不是被停用、被工作资料/家长控制限制，或装在另一个用户下；用下面的命令能看到实际装的是哪个包、有没有声明权限：
 
 ```sh
 adb shell dumpsys package com.lele.navigator | grep -E 'versionName|versionCode|POST_NOTIFICATIONS'
@@ -57,12 +57,12 @@ adb shell pm grant com.lele.navigator android.permission.POST_NOTIFICATIONS
 
 ## OTA 更新
 
-App 的 TSX 可以作为签名包（`.nshpkg`）从 GitHub Release 下发，不用每次重新装 APK。**装一次 `0.1.5 (build 5)` 的 APK 之后**，只改界面、逻辑、图片和字体都可以走 OTA；改 Rust crate、nsh runtime、权限或 manifest 仍然要出新 APK。
+App 的 TSX 可以作为签名包（`.nshpkg`）从 GitHub Release 下发，不用每次重新装 APK。**装一次 `0.1.6 (build 7)` 的 APK 之后**，只改界面、逻辑、图片和字体都可以走 OTA；改 Rust crate、nsh runtime、权限或 manifest 仍然要出新 APK。
 
 - `app/nsh.json` 的 `updater` 指向 `dongjiahong/navigator` 的最新 Release，并写了两个公钥：`publicKey` 验 `latest.json`，`packages.roots` 验 `.nshpkg`。
 - 签名私钥在仓库外：`~/.navigator-ota/`（`root.secret` 离线保存；`release.secret`、`release.cert`、`update.secret` 用于发版）。**不要把任何 `.secret` 提交进仓库。**
-- GitHub Actions 的 `.github/workflows/ota.yml` 在推 `v*` tag 时用 nightly nsh 打包、签名并创建 Release。仓库需要三个 secret：`NSH_RELEASE_KEY`、`NSH_RELEASE_CERT`、`NSH_UPDATE_KEY`，内容分别是上面三个文件。
-- 不想用 CI 时，本地跑 `scripts/ota-release.sh --build 6 --notes CHANGES.md`，把 `dist/*.nshpkg`、`dist/latest.json`、`dist/latest.json.sig` 三个文件一起传到 GitHub Release（顺序：包先，manifest 和签名后）。
+- GitHub Actions 的 `.github/workflows/ota.yml` 在推 `v*` tag 时用 nightly nsh 打包、签名并创建 Release。仓库需要三个 secret：`NSH_RELEASE_KEY`、`NSH_RELEASE_CERT`、`NSH_UPDATE_KEY`，内容分别是上面三个文件。**这套 CI 目前跑不起来**：`runs-on: macos-14` 在这个仓库报 `configuration 'macos-14-arm64-us-default' is not supported`，而 nightly nsh 只发 `macos-arm64` 包，没有能在 x86_64 runner 上跑的那份；所以实际的 Release 都是本地发出来的。
+- 不想用 CI 时，本地跑 `scripts/ota-release.sh --build 7 --notes CHANGES.md`，把 `dist/*.nshpkg`、`dist/latest.json`、`dist/latest.json.sig` 三个文件一起传到 GitHub Release（顺序：包先，manifest 和签名后）。
 - 每次发版都要把 `app/nsh.json` 的 `build` 加一；`version` 也一起改。App 只在包比当前 build 新时才装。
 - App 启动后 5 秒检查一次；手机在「连到 Mac」Sheet 里还有「检查更新」。Android/iOS 下载后**下次冷启动**运行，桌面可以按「重启」立刻运行。包第一次运行有 10 秒试用期，起不来会自动回退。
 
@@ -207,7 +207,7 @@ nsh 只认一个 `icon` 键（写对象会报 `invalid type: map`），所以 An
 
 ## 验证过的
 
-- 无头：`nsh test` → 280 通过 + 2 条按设计跳过（`src/pairing_test.rs` 里会写盘的两条 `#[ignore]`，要单独跑）。共 282 条：TSX 界面测试 225 + Rust 单测 57（55 通过 + 2 条跳过）。
+- 无头：`nsh test` → 278 通过 + 2 条按设计跳过（`src/pairing_test.rs` 里会写盘的两条 `#[ignore]`，要单独跑）。共 280 条：TSX 界面测试 223 + Rust 单测 57（55 通过 + 2 条跳过）。
 - macOS 全量：`nsh test --target macos` → **分文件验证，没有跑过合并后的全量**，所以这里不填数字。
 - Android 真机（Redmi 25060RK16C / Android 16，Wi-Fi 调试）：`nsh test --target android` → 28 个测试文件、187 个用例，186 通过；唯一失败的一条属于手机行的侧滑，那块正在改，数字之后单独补。Android 目标只跑 TSX 测试，crate 的 Rust 单测在无头那一轮里跑，两个数字不能相加。
 - 真机同步与配对（手机与 Mac 同网段 `192.168.6.x`，Mac 端用隔离的 `HOME` 运行）：未配对时状态行是「需要配对码」；输对码即「已同步」且两端计数一致；错码显示「配对码不对」且不会反复重试；连错 5 次显示「尝试太多次，稍后再试」，锁定期内没有请求发出；Mac 重新生成配对码后手机回到「配对码不对」；重启手机后不再要求输码。
@@ -217,7 +217,7 @@ nsh 只认一个 `icon` 键（写对象会报 `invalid type: map`），所以 An
 - 手机上手实测：捕获 Sheet（含「连续添加」、撤销提示不遮「添加」按钮）、详情页逐键编辑、备注里 URL 一行点开真的拉起浏览器、到期横幅在前台出现、示例数据清除入口，都在真机上走过一遍；行中部横滑翻页无误触，长按行操作 Sheet、列顶下拉刷新都不崩。卡片的左右滑动手势已移除：横向拖动只翻页，完成 / 归档 / 删除 / 打开都在长按 Sheet 与详情页里；`RowActions.test.tsx` 覆盖长按 Sheet 的 完成 / 归档 / 恢复 / 删除 与「横向拖动不操作卡片」，真机待复测。
 - Android 通知（API 35 模拟器 `navigator_api35`）：把截止设到今天 20:00 后，`dumpsys notification` 里出现 `tag=navigator.card.c3`、标题「到时间了：写周报」；点通知打开手机的卡片详情页；进程被 `kill -9` 后从通知冷启动，仍然打开同一张卡。真机尚未复测。
 - 手机竖向滚动 1224 帧掉帧 0.82%（p50 10ms / p90 12ms / p95 13ms / p99 14ms，Missed Vsync 0）。
-- 打包：`nsh package --target android` 出来的 APK 77.8 MB（debug 签名）。
+- 打包：`scripts/build-android.sh`（arm64 + fat LTO + `opt-level=z`）出来的 APK 26.0 MB（debug 签名）。同一份源码用默认 profile 打双 ABI 是 78.1 MB，只出 arm64 仍是 46.2 MB——差的是 LTO 把每个泛型实例只在链接时保留一份（`.text` 30.6 MB → 12.9 MB）；换成 `opt-level=s` 是 30.9 MB。`panic=abort` 还能到 22.7 MB，但会拆掉 nsh 用 `catch_unwind` 做的错误边界，不用。
 - 无头稳定性：一天里跑 8 次无头 `nsh test`，1 次在引擎退出阶段 SIGSEGV（栈 `js_free_value_rt` ← `reactive::free_all` ← `state::uninstall`），其余 7 次正常。只发生在退出阶段，不是 App 逻辑，没有尝试改引擎。
 - **中途 SIGSEGV 先怀疑引擎和缓存，不是业务代码。** `Panel.test.tsx` 在输入长备注时偶尔崩在 `JS_CallInternal` ← `js_array_find` ← `dom::item_run`；同一份代码逐文件二分时表现成「加一行无关 import 就崩、删掉就好」，HEAD 版本也会偶发。清掉 `.nsh/test/build` 后全量 282 条一次通过；之后在 APK 打包占满 CPU 时又复现过一次，紧接着单独重跑又通过。所以这类崩溃：先清缓存、避开并行重负载再重跑，不要为它改业务逻辑。
 - 对比度在真机像素上实测：FAB 字形 7.40:1，记一笔空态按钮 6.96:1。
@@ -238,9 +238,14 @@ nsh test --target android   # 在真机上跑测试
 打包：
 
 ```bash
-nsh package --target macos      # → .nsh/out/Navigator.app
-nsh package --target android    # → .nsh/out/Navigator.apk
+# 仓库根目录
+scripts/build-android.sh          # → app/.nsh/out/Navigator.apk（arm64，26 MB）
+
+# app/ 里
+nsh package --target macos        # → .nsh/out/Navigator.app
 ```
+
+Android 不要直接用 `nsh package --target android` 发：它默认同时打 arm64 和 armeabi-v7a、用没有 LTO 的默认 release profile，出来是 78.1 MB。脚本只做这两件事，原因和实测数字写在脚本开头。
 
 截图（需要真实绘制，无头模式拿不到）：
 
