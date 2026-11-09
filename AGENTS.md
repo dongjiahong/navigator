@@ -34,10 +34,32 @@ Navigator 是一个 nsh App：TSX 界面在 `app/`，同步、SQLite、通知等
 
 ## 打包与 OTA
 
-- Android APK：`cd app && nsh package --target android`，产物是 `app/.nsh/out/Navigator.apk`。
-- OTA 包：`scripts/ota-release.sh --build N`，产物在 `dist/`。
+### Android APK：用脚本，不要直接 `nsh package`
+
+```bash
+scripts/build-android.sh          # 仓库根目录执行；产物 app/.nsh/out/Navigator.apk
+```
+
+脚本只做两件事：只打 `arm64-v8a`，并给 release profile 加 `LTO=fat`、`codegen-units=1`、`opt-level=z`。
+同一份源码量过：默认 `nsh package --target android`（双 ABI、无 LTO）78.1 MB → 只出 arm64 46.2 MB → 脚本 26.0 MB。
+
+- **参数为什么走环境变量**：`.nsh/rust/` 是 nsh 生成的工作区，每次运行都会重写 `Cargo.toml`，写进去会被覆盖；`CARGO_PROFILE_RELEASE_*` 由 Cargo 自己读，绕开了这一层。
+- **不要加 `CARGO_PROFILE_RELEASE_PANIC=abort`**：能到 22.7 MB，但 nsh 用 `catch_unwind` 把组件 panic 变成可显示的错误（`nsh-core` 的 `element/component.rs`），abort 会把「显示错误」变成「进程退出」。
+- 大头是 `.text`：30.6 MB → 12.9 MB。省下的是每个 crate 各自复制一份的泛型实例化，不是压缩。
+- `opt-level=s` 是退路（30.9 MB），只有真机上觉得 `z` 慢才换；`z` 与 `s` 差 6.4 MB，不是无关紧要的抖动。
+- 只发 arm64，是因为 minSdk 28（Android 9）之后在用的设备几乎都是 arm64；代价是 32 位的 Android Go 装不了。需要 32 位就自己跑 `nsh package --target android --abi armeabi-v7a`，体积会回去。
+
+### 发版
+
+1. 改 `app/nsh.json` 的 `version` 和 `build`：`build` 必须是没发布过的新数字，App 只装比当前 build 大的 OTA 包（版本号不参与比较）。
+2. `scripts/build-android.sh` 出 APK；`scripts/ota-release.sh --build N` 出 `dist/*.nshpkg`、`dist/latest.json`、`dist/latest.json.sig`。
+3. 传 Release：三个 OTA 文件加 APK 一起，标题用 `Navigator {version} (build {build})`，tag 沿用 `v{version}-{build}`。必须是正式发布，不能 draft / prerelease——App 读的是 latest。
+
 - 签名私钥在仓库外（`~/.navigator-ota/`），任何 `.secret` 都不提交。
 - OTA 只换 TSX/图片/字体；Rust crate、runtime、权限或 manifest 的改动需要新的 APK。
+- 界面上的版本号来自 `app/updates.ts` 的 `runningLabel()`：正在跑的 OTA 包优先，没有包时用 shell（APK）的 version/build，格式 `0.1.6 (build 7)`。
+- **发版由用户本机完成**（编译、打 tag、传 Release）；agent 不要代为推送 tag 或创建 Release。
+- CI 不可用：`.github/workflows/ota.yml` 在 `macos-14` 上报 `configuration 'macos-14-arm64-us-default' is not supported`，仓库也没有配任何 secret，推 tag 只会留下一个失败的 run。macOS 的 `.app` 同理，`nsh package --target macos` 在本机打，没有可用的 arm64 runner。
 - 全量测试只在打包/发版前跑，不要每改一行都跑。
 
 ## 其他
