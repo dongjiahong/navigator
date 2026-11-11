@@ -19,6 +19,7 @@ export type MergeField =
   | "tags"
   | "due"
   | "repeat"
+  | "images"
   | "status"
   | "deleted"
   | "rank";
@@ -30,6 +31,7 @@ export const MERGE_FIELDS: readonly MergeField[] = [
   "tags",
   "due",
   "repeat",
+  "images",
   "status",
   "deleted",
   "rank",

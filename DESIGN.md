@@ -411,6 +411,19 @@ figures, and
 **the count is always Ink Tertiary**: green on this board means a finished card,
 so a checklist that is fully ticked must not dress itself as one.
 
+**A card can carry a picture.** Up to three, stored as `data:` URLs on the card
+itself — so a picture rides the same row its title does through sync, export and
+backup, and can never be a file the other device does not have. The system picker
+scales a photo down to a glance (1280 px on the long side, quality 0.72) before it
+enters the board; a screenshot pasted into a title or a note keeps the size the
+platform handed over, because the paste is the fast path and a field cannot
+resize what it is given. The panel, the phone's detail sheet and the capture sheet
+show the same strip: tiles pressed to see one whole, a corner on each to take it
+away, and a 贴图 tile that opens the picker. Pasted files are taken out of the
+paste as pictures; its text still goes into the field. The board itself carries
+only the glyph and, past one, the count — a thumbnail under every title would turn
+a column into a gallery, and the picture is looked at in the card.
+
 **The card is its own handle.** There is no grip glyph on the Mac: a press that
 moves 5 points lifts the card, and a press that does not is the press that opens
 it. A grip was a target that had to be found inside a 12px padding, it was
@@ -446,6 +459,14 @@ following the finished one into 已完成 and undoing the work.
 A label row (name at Ink Secondary, count at Ink Tertiary, a plus button) closed by
 a `hairlineSoft` rule — one step quieter than the header's `Rule`, so the label
 strip does not read as a table cell. No background of its own.
+
+**A column answers what needs doing next, so it is ordered by deadline.** The
+nearest deadline is the top of the column and an overdue card sits above every
+card still ahead; cards with no deadline keep the order the user gave them, after
+all the dated ones. Two cards on one deadline fall back to `rank`. A drag still
+writes a rank — the undated part of a column is the user's to arrange — but a
+card with a deadline shows where its due time says it does, so dragging it among
+other dated cards changes nothing visible.
 
 The archive's label row carries one more thing: 清空 at Ink Tertiary, drawn only
 while there is something to clear, and it asks first in the platform's own alert
@@ -544,18 +565,25 @@ it back.
 **A deadline notifies.** On the Mac the crate gives the date to
 `UNUserNotificationCenter`, which owns the schedule from then on: it delivers
 with the app closed, plays the sound chosen in System Settings, and lists beside
-every other app's. Only open work with a deadline still ahead is scheduled — a
-finished card, a removed card and a date in the past all drop their reminder, and
-an overdue card says 已逾期 on the board instead of pushing a notification about
-a moment that has already gone. On the phone nsh's `Notifications` posts a real
-system notification while the app is running: a card that comes due within the
-app's five-minute window is handed to the system under `navigator.card.<id>`,
-and pressing it opens the card on the phone's sheet. Where the permission is
-denied, or the platform cannot show one, the same window puts one line above the
-list instead: amber glyph, 到时间了, the card's title, 打开 and a dismiss. The
-phone still cannot wake itself: nsh has no scheduled notification or alarm, so a
-deadline that passes while Navigator is closed is seen on the next launch, not
-announced at its hour.
+every other app's. Every open card with a deadline is scheduled — a finished or
+removed card drops its reminder — and a card that goes past its deadline is not
+dropped but repeated: the deadline's own notification fires at its hour, and a
+second request under `<id>.hourly` repeats every hour, in the same category and
+with the same 完成 / 推迟 1 小时 buttons, until the card is done, filed or
+removed. An overdue card is work nobody has done, and the board saying 已逾期 to
+itself is not a reminder. The repeating request is the one kind of notification
+the system keeps speaking with the app shut; a new launch hands it a fresh hour,
+and the pass that finds the card finished takes it back. On the phone nsh's
+`Notifications` posts a real system notification while the app is running: a card
+that comes due within the app's five-minute window is handed to the system under
+`navigator.card.<id>`, pressing it opens the card on the phone's sheet, and an
+overdue card that has passed another hour is handed over again under the same id.
+Where the permission is denied, or the platform cannot show one, the same loop
+puts one line above the list instead: amber glyph, 到时间了, the card's title,
+打开 and a dismiss; dismissing counts as that card having spoken, so it is quiet
+for its own hour. The phone still cannot wake itself: nsh has no scheduled
+notification or alarm, so an hour that passes while Navigator is closed is seen
+on the next launch, not announced at its moment.
 
 **One banner at a time is all the system shows.** Cards due at the same minute are
 each handed over, and the system replaces the banner in front of the eye with the
@@ -800,7 +828,8 @@ Mac. A change is written as the row that changed, a third of a second after the
 user makes it, and leaving the app flushes what the wait was still holding.
 
 **Merging is per field, and deletes are tombstones.** Both devices hold a board and
-each field of a card — title, notes, tags, due, status, deleted, rank — carries its
+each field of a card — title, notes, tags, due, repeat, images, status, deleted,
+rank — carries its
 own stamp, so the title typed on the Mac and the 完成 pressed on the phone in the
 same minute both survive. Where the stamps are equal the larger serialized text of
 the two values wins, in UTF-16 code-unit order on both sides, so two devices can
@@ -893,8 +922,10 @@ on a Mac too, now that a Mac has something to look for.
 an index in an array that the other device cannot see. A move is the midpoint
 between two neighbours, a column that runs out of room between them renumbers
 itself in steps of 1000, and `ord` in the file is only a cache for cards written
-before ranks existed. Anything that reads the visible order without sorting by
-`rank` is one merge away from showing a different board than the other device.
+before ranks existed. The visible order sorts by deadline first and then by
+`rank`, so anything that reads order without that sort is one merge away from
+showing a different board than the other device; the rank is what decides the
+undated cards a column holds.
 
 **The Six Digits Rule.** Six digits, generated from the system's randomness with
 rejection sampling so no code is likelier than another, kept out of the board file,

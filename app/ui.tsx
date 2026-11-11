@@ -1,7 +1,9 @@
 import {
   Canvas,
   Clipboard,
+  Image,
   Path2D,
+  Picker,
   Scroll,
   Text,
   View,
@@ -71,7 +73,8 @@ type IconName =
   | "search"
   | "filter"
   | "repeat"
-  | "clock";
+  | "clock"
+  | "image";
 
 const PATHS: Record<IconName, string[]> = {
   plus: ["M12 5.5v13", "M5.5 12h13"],
@@ -99,6 +102,9 @@ const PATHS: Record<IconName, string[]> = {
   // A face and its hands: the due time's own button, so the row says what
   // pressing it changes without a 时间 caption.
   clock: ["M12 3.5a8.5 8.5 0 100 17 8.5 8.5 0 000-17z", "M12 7.5v4.8l3.3 2"],
+  // A picture in a frame, with a ridge of hills — the meta row's mark that a
+  // card carries one, and the attach button's own glyph.
+  image: ["M4 5.5h16v13H4z", "M4.5 16l4.8-4.8 3.2 3.2 2.4-2.4 4.6 4.6", "M15.7 9.4a1.1 1.1 0 100 .01"],
 };
 
 /**
@@ -134,6 +140,247 @@ export function Icon(props: { name: IconName; size?: number; tint: string; width
         }
       }}
     />
+  );
+}
+
+/** How many pictures one card holds. Three read as a row; more would be a gallery. */
+export const MAX_IMAGES = 3;
+
+/** One picture, coated as the `data:` URL a card carries. */
+async function fileToDataUrl(file: File): Promise<string | null> {
+  if (file.type && !file.type.startsWith("image/")) return null;
+  const bytes = await file.bytes();
+  let binary = "";
+  // A chunk at a time: `String.fromCharCode(...all)` over a photo's bytes
+  // overflows the argument list of a large image.
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return `data:${file.type || "image/jpeg"};base64,${btoa(binary)}`;
+}
+
+/**
+ * The pictures among a paste's files, as the data URLs a card carries.
+ *
+ * A pasted screenshot is the fastest way a picture reaches a card, and it is
+ * the same path on both devices: the platform reads the clipboard and hands the
+ * bytes over, so the app never asks for the clipboard itself.
+ */
+export async function imagesFromFiles(files: readonly File[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const file of files) {
+    try {
+      const src = await fileToDataUrl(file);
+      if (src) out.push(src);
+    } catch {
+      // A file the platform could not read is not a reason to lose the paste's
+      // text: it is simply not an attachment.
+    }
+  }
+  return out;
+}
+
+/**
+ * The card's pictures after a paste, or `null` when the paste held none.
+ *
+ * A press on a card's note is where a screenshot is pasted, and the field is
+ * also the note's text: the images are taken out of the paste here so the text
+ * follows its ordinary path, and the paste stops at the card's limit rather
+ * than growing a gallery. The paste's own picture is not scaled the way the
+ * picker's is — the platform hands over its bytes as they were — so a card
+ * carries the screenshot at the size it was taken.
+ */
+export async function withPastedImages(
+  current: readonly string[],
+  files: readonly File[],
+): Promise<string[] | null> {
+  const room = MAX_IMAGES - current.length;
+  if (room <= 0 || files.length === 0) return null;
+  const added = await imagesFromFiles(files.slice(0, room));
+  return added.length ? [...current, ...added] : null;
+}
+
+/**
+ * The system's picture picker, downscaled to a card's size.
+ *
+ * The picker does the scaling natively, so a phone's 12-megapixel photo becomes
+ * a glance-sized copy before it ever enters the board: a card is looked at, not
+ * printed, and the row has to stay small enough to sync and to sit in a file.
+ */
+export async function pickCardImages(limit = MAX_IMAGES): Promise<string[]> {
+  const picked = await Picker.pickImages({
+    multiple: limit > 1,
+    limit,
+    maxDimension: 1280,
+    quality: 0.72,
+    format: "compatible",
+  });
+  return imagesFromFiles(picked.map((image) => image.file));
+}
+
+/** The picture a reader asked to see whole, or `null`. */
+export const viewingImage = signal<string | null>(null);
+
+/**
+ * A card's pictures: small enough to sit on the sheet, pressed to see one whole.
+ *
+ * The same strip is on the Mac's panel, the phone's sheet and the capture sheet,
+ * so a picture is added and removed the same way everywhere. Removing is a
+ * press on the tile's own corner, not a mode: there is nothing else to do to a
+ * picture but look at it or take it away.
+ */
+export function ImageAttachments(props: {
+  images: readonly string[];
+  onChange: (next: string[]) => void;
+  size?: "mac" | "phone";
+}) {
+  const phone = props.size === "phone";
+  const side = phone ? 72 : 62;
+  const busy = signal(false);
+  const add = async () => {
+    if (busy()) return;
+    const room = MAX_IMAGES - props.images.length;
+    if (room <= 0) return;
+    busy.set(true);
+    try {
+      const picked = await pickCardImages(room);
+      if (picked.length) props.onChange([...props.images, ...picked].slice(0, MAX_IMAGES));
+    } catch {
+      // A denied picker or a host with no picker leaves the card as it was;
+      // the button stays there for the next try.
+    } finally {
+      busy.set(false);
+    }
+  };
+  return (
+    <View testID="image-attachments" style={{ flexDirection: "row", flexWrap: "wrap", gap: phone ? 8 : 7 }}>
+      {props.images.map((src, index) => (
+        <View style={{ width: side, height: side }}>
+          <View
+            testID={`image-${index}`}
+            onPress={() => viewingImage.set(src)}
+            accessibilityLabel="查看图片"
+            style={{
+              width: side,
+              height: side,
+              borderRadius: 8,
+              overflow: "hidden",
+              backgroundColor: theme().chip,
+            }}
+          >
+            <Image src={src} style={{ width: side, height: side, objectFit: "cover" }} />
+          </View>
+          <View
+            testID={`image-remove-${index}`}
+            onPress={() => props.onChange(props.images.filter((_, i) => i !== index))}
+            role="button"
+            accessibilityLabel="移除图片"
+            hitSlop={6}
+            style={{
+              position: "absolute",
+              top: -5,
+              right: -5,
+              width: 19,
+              height: 19,
+              borderRadius: 9.5,
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: theme().panel,
+              boxShadow: theme().shadow,
+            }}
+          >
+            <Icon name="close" size={10.5} tint={theme().textSecondary} width={2.1} />
+          </View>
+        </View>
+      ))}
+      <If when={props.images.length < MAX_IMAGES}>
+        <View
+          testID="image-add"
+          onPress={() => void add()}
+          role="button"
+          accessibilityLabel="贴图"
+          activeStyle={{ opacity: 0.6 }}
+          style={{
+            width: side,
+            height: side,
+            borderRadius: 8,
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 3,
+            backgroundColor: busy() ? theme().select : theme().chip,
+          }}
+        >
+          <Icon name="image" size={phone ? 19 : 17} tint={theme().textSecondary} width={1.6} />
+          <Text style={{ fontSize: phone ? 11.5 : 11, fontWeight: "500", color: theme().textTertiary }}>
+            {props.images.length ? "再加" : "贴图"}
+          </Text>
+        </View>
+      </If>
+    </View>
+  );
+}
+
+/** One picture, whole, over the board it belongs to. */
+export function ImageViewer() {
+  const src = () => viewingImage();
+  const width = () => Math.max(240, Math.min(880, windowSize().width - 96));
+  const height = () => Math.max(200, Math.min(720, windowSize().height - 140));
+  return (
+    <Dialog
+      testID="image-viewer"
+      open={!!src()}
+      animation="fade"
+      onOpenChange={({ open }) => {
+        if (!open) viewingImage.set(null);
+      }}
+      backdropStyle={{ backgroundColor: theme().scrim }}
+      style={{
+        margin: "auto",
+        width: width(),
+        height: height(),
+        padding: 12,
+        borderRadius: 16,
+        backgroundColor: theme().panel,
+        boxShadow: theme().shadowLift,
+      }}
+    >
+      {src() ? (
+        <View
+          onPress={() => viewingImage.set(null)}
+          accessibilityLabel="关闭图片"
+          style={{ flex: 1, borderRadius: 10, overflow: "hidden", backgroundColor: theme().groundDeep }}
+        >
+          <Image src={src()!} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+        </View>
+      ) : null}
+    </Dialog>
+  );
+}
+
+/**
+ * A card's picture, as the meta row says it: the glyph and, past one, the
+ * count. A thumbnail on every card would turn a quiet column into a gallery,
+ * and the picture is looked at in the card, not on the board.
+ */
+export function ImageMark(props: { count: number; size?: "mac" | "phone" }) {
+  const phone = props.size === "phone";
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+      <Icon name="image" size={phone ? 12.5 : 11.5} tint={theme().textTertiary} width={1.8} />
+      {props.count > 1 ? (
+        <Text
+          style={{
+            fontSize: phone ? 12.5 : 12,
+            fontWeight: "500",
+            color: theme().textTertiary,
+            fontVariant: ["tabular-nums"],
+          }}
+        >
+          {props.count}
+        </Text>
+      ) : null}
+    </View>
   );
 }
 

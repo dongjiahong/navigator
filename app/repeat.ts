@@ -150,6 +150,7 @@ export type Successor = {
   tags: string[];
   due: string;
   repeat: Repeat;
+  images?: string[];
 };
 
 /**
@@ -170,6 +171,9 @@ export function successorOf(card: Card, at: number): Successor | null {
     tags: [...card.tags],
     due,
     repeat: card.repeat,
+    // The picture belongs to the work, not to the occurrence: a weekly report
+    // that carries its template picture carries it again.
+    ...(card.images?.length ? { images: [...card.images] } : {}),
   };
 }
 

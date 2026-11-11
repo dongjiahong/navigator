@@ -34,6 +34,7 @@ import { theme, onAccentWash } from "./theme";
 import {
   DueCalendar,
   Icon,
+  ImageViewer,
   TagManager,
   TimePicker,
   UndoToast,
@@ -452,6 +453,9 @@ export function App() {
       {/* One month for both layouts, for the same reason: the deadline editor on
           the Mac's card and on the phone's sheet opens the same calendar. */}
       <DueCalendar />
+      {/* One picture, whole, over whatever surface asked for it: the Mac's
+          panel and the phone's sheet both press a tile to see it here. */}
+      <ImageViewer />
       {/* The same hour-and-minute grid for both layouts: the deadline's time is
           one press on the row and two taps in the picker, never a keyboard. */}
       <TimePicker />

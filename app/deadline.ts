@@ -26,6 +26,40 @@ export type ReminderPlan = {
 /** A minute, the unit the lead time is given in. */
 const MINUTE_MS = 60_000;
 
+/** The interval an overdue card is reminded at, until it is finished or filed. */
+export const HOURLY_MS = 60 * 60 * 1000;
+
+/**
+ * Whether a card is open work whose deadline has already passed: the board's own
+ * 已逾期, and the cards an hourly reminder goes on about.
+ *
+ * A deadline that has passed used to ask nothing of the system — the pill on the
+ * card was the whole answer. Overdue work is the work most worth being told
+ * about again, though, and a card nobody finished is still overdue an hour
+ * later, so it keeps asking until the card is done, filed or removed.
+ */
+export function overdueNow(card: Card, now: number): boolean {
+  if (card.deleted || !card.due) return false;
+  if (card.status === "done" || card.status === "archive") return false;
+  return epochOf(card.due) <= now;
+}
+
+/**
+ * Whether an overdue card's hour has come round since it was last heard.
+ *
+ * The first repeat is an hour after the deadline rather than at it: the
+ * deadline's own notification says the moment, and this one is the follow-up.
+ * `spokenAt` is when the card was last announced — its deadline when it never
+ * has been — so a banner the user has just put away waits its hour again
+ * instead of coming back on the next tick.
+ */
+export function hourlyDue(card: Card, now: number, spokenAt?: number): boolean {
+  if (!overdueNow(card, now)) return false;
+  const at = epochOf(card.due!);
+  const last = Math.max(at, spokenAt ?? at);
+  return now - last >= HOURLY_MS;
+}
+
 /** How far apart reminders that share a moment are handed over. */
 export const SPREAD_MS = 2500;
 

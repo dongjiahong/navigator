@@ -1,6 +1,6 @@
 # 领航 · Navigator
 
-一个 Mac + Android 的原生看板：四列（待办 / 进行中 / 已完成 / 归档），卡片有标题、标签、备注和截止时间。Mac 和手机都能编辑，两边实时同步。
+一个 Mac + Android 的原生看板：四列（待办 / 进行中 / 已完成 / 归档），卡片有标题、标签、备注、截止时间和最多三张图片。Mac 和手机都能编辑，两边实时同步。
 
 技术栈是 [Native Shell (nsh)](https://nsh.dev)：界面用 TSX，同步服务用 Rust，编译成各自平台的原生视图，没有 WebView。
 
@@ -15,8 +15,10 @@
 - **截止有具体时间，也有日历。** 今天 / 明天 / 下周 只改日期，时间留着不动；点时间胶囊打开 App 自己的时间选择器：24 个小时格加 12 个五分钟格，拇指点两下就选完，不再对着 `TimeField` 的时分段敲键盘；“现在”保留当前分钟。日历面板选任意一天（`Calendar` 自己画出星期几和月份，因为 nsh 的 `Calendar` 不画任何字，而且它的弹层在这个引擎里是透明的）。卡片上永远显示到分钟。
 - **删除不再先问，而是可以撤销。** 删卡、完成、归档都会在底部出一条一行提示（`UndoToast`：纸色填充——Mac 用 `card`、手机用 `select`——`shadowLift`、无边框，Mac 居中在窗口底、手机在「添加」按钮上方），6 秒、一次一条；按「撤销」把卡写回去，连它原来的列内位置也还回来。卡片本身是墓碑，撤销就是一次 `deleted: false` 的普通写入。**标签删除仍然先问**——它会把用户没在看的卡片上的标签一起摘下；清空归档、清除示例数据这类批量操作也先问，并在平台原生 `AlertDialog` 里点名数量。
 - **整张卡就是把手。** Mac 上没有单独的拖拽把手：按住卡移动 5pt 就把它拎起来（跨列、跨位置），按住不动就是点开。拖到列顶或列底 48pt 以内会自动滚动，越靠边越快。键盘做同样的事：方向键走卡，回车打开，空格完成/恢复，`Cmd+]` / `Cmd+[` 换列，`Cmd+K` 命令面板，`Cmd+F` 跳到搜索框，`Cmd+N` 新建。
+- **每列按截止时间排，不是按 rank 排。** 最近到期的一张在最上面，已逾期的排在所有还没到期的前面；没有截止的卡保持用户拖出来的顺序，排在所有有日期的卡之后。拖动仍然会写 `rank`（它决定无日期那部分的顺序），但有截止的卡最终显示在它自己的时间位置上。
 - **筛选是本机的视图，不是看板的数据。** 标签可以多选（命中任一即可）、日期条件三选一（今天 / 已逾期 / 无日期），再叠一个搜索框（标题、备注和标签名都能搜）。三者一起收窄，数量始终是整个看板的数。筛选状态只活在各自设备的进程里，不跟着同步走。
-- **截止会提醒。** Mac 上是一条真正的系统通知（Rust 侧直接走 `UNUserNotificationCenter`，带系统通知音，App 退出后照样送达）；手机在 App 打开时也能发真正的系统通知（nsh main 的 `Notifications`，APK 现在带 `POST_NOTIFICATIONS`），点通知会打开那张卡；没有权限或平台发不了时，退回列表上方的横幅。App 关闭后手机仍然不会到点唤醒。
+- **卡片可以带图。** 最多三张，存成卡上的 `data:` URL，所以图片跟着标题走同一条同步、导出和备份，不会变成另一台设备没有的文件。系统相册/文件选择器会先把照片缩到 1280px（质量 0.72）；截图直接粘进标题或备注也会变成附件（平台给多大就存多大）。Mac 的检查器、手机的详情页和采集页是同一排缩略图：点开看整张，角上叉掉，点「贴图」开选择器。看板上只画一个图标和数量，不铺缩略图。
+- **截止会提醒。** Mac 上是一条真正的系统通知（Rust 侧直接走 `UNUserNotificationCenter`，带系统通知音，App 退出后照样送达）；过期后同一条卡每小时再响一次，直到完成或归档。手机在 App 打开时也能发真正的系统通知（nsh main 的 `Notifications`，APK 现在带 `POST_NOTIFICATIONS`），点通知会打开那张卡；没有权限或平台发不了时，退回列表上方的横幅。App 关闭后手机仍然不会到点唤醒。
 
 ---
 
@@ -26,17 +28,16 @@ nsh 0.4.0 没有任何通知 API。App 现在把 nsh 固定到 main 的 `36b9168
 
 **Mac：走系统通知中心。** `UNUserNotificationCenter` 按卡片 id 建请求，触发时间是「距现在多少秒」，内容带标题、备注摘要和 `UNNotificationSound::defaultSound()`——声音是用户在「系统设置 → 通知 → 领航」里选的那个，不是 App 自己塞的文件。调度权交给系统之后，App 退出、关机重启都不影响送达。被系统拒绝时（没授权）走 `status()` 回报 `denied`，界面不会假装通知过。
 
-- 只有「还没做完 + 有截止 + 截止在未来」的卡才排期；完成、归档、删除即时撤销。
+- 还没做完、有截止的卡会排期：截止在未来的排一条定时通知；已经过期的排一条**每小时重复**的通知（id 后缀 `.hourly`，`UNTimeIntervalNotificationTrigger(repeats: true)`），直到完成、归档或删除，下一次对账时自动撤掉。第一次重复在排期后一小时，不是卡上原来的截止分钟。
 - 同一张卡改了截止或标题会以同名 id 覆盖，不会堆两条。
-- 已经过期的截止不排期：过期的卡在板上已经显示红色的「已逾期」，再推一条通知是噪音。
 - 测试用 `Reminder.pending()` 读回系统真正持有的请求，断言的是系统状态而不是 App 自己的记账。
 - **提前提醒是同一张卡的第二条通知。** id 是 `navigator.card.<id>.pre`，触发在截止前 N 分钟；N 是本机设置（`Storage` 键 `navigator.leadMinutes`，默认 0 即关闭，可选 5 / 15 / 30 / 60），只在 Mac 上，不随看板同步。入口在命令面板（`Cmd+K` 搜「提前提醒」），换了 N 之后所有卡的这两条通知立即重排。
 - **通知上带两个动作。** 注册在自己的 category（`navigator.reminder`）里：「完成」和「推迟 1 小时」，点通知本体则打开这张卡。系统把回答记在队列里，Rust 侧 `Reminder.takeResponses()` 轮询取回，界面按一次普通写入处理。**这三条交互（两个动作按钮、点本体打开卡）没有人工点过**——本机拿不到可用的通知点击授权，行为以测试为准。
 - **启动后要对账。** App 退出后立刻重开时，`UNUserNotificationCenter` 会无声丢掉一部分已经排好的请求，所以启动后不只相信自己的记账：`Reminder.pending()` 读回系统实际持有的 id，缺的补排、多的撤掉。
 
-**Android：App 打开时能发系统通知。** nsh main 增加了 `Notifications`，`nsh package` 在 App 可以通知时会往 manifest 写 `POST_NOTIFICATIONS`（不声明 `capabilities` 的独立 App 默认拥有这项能力）。`reminders.ts` 在 Android 上读取/请求通知权限；App 每 20 秒检查一次「五分钟内刚到期」的卡，有权限就发一条 `id` 为 `navigator.card.<卡片 id>` 的系统通知，标题是「到时间了：…」，点通知会打开手机的卡片详情页。权限被拒或平台发不了时，仍然退回列表上方的横幅（「打开」/「知道了」）。手机「连到 Mac」Sheet 里新增了「通知」一栏：一行显示当前权限状态，旁边「测试」按钮会请求权限并发一条「通知测试」，不用等到某个截止时间。
+**Android：App 打开时能发系统通知。** nsh main 增加了 `Notifications`，`nsh package` 在 App 可以通知时会往 manifest 写 `POST_NOTIFICATIONS`（不声明 `capabilities` 的独立 App 默认拥有这项能力）。`reminders.ts` 在 Android 上读取/请求通知权限；App 每 20 秒检查一次「五分钟内刚到期」的卡，有权限就发一条 `id` 为 `navigator.card.<卡片 id>` 的系统通知，标题是「到时间了：…」，点通知会打开手机的卡片详情页。已逾期的卡每小时再发一次（标题「已逾期：…」，同一个 id 覆盖上一条）；没有权限时退回列表上方的横幅，关掉后这张卡安静一小时。手机「连到 Mac」Sheet 里新增了「通知」一栏：一行显示当前权限状态，旁边「测试」按钮会请求权限并发一条「通知测试」，不用等到某个截止时间。
 
-**通知开关是灰色时先确认安装包。** 本仓库打出的 `0.1.7 (build 8)` APK 的 manifest 里同时有 `INTERNET` 和 `POST_NOTIFICATIONS`；旧包没有后者，Android 13+ 的通知页就会把开关画成灰的、点不动。用 `app/.nsh/out/Navigator.apk` 覆盖安装（`adb install -r`，保留数据），再打开 App 看「连到 Mac → 通知」。如果版本已经是 0.1.7 但开关仍灰，检查这台手机上领航是不是被停用、被工作资料/家长控制限制，或装在另一个用户下；用下面的命令能看到实际装的是哪个包、有没有声明权限：
+**通知开关是灰色时先确认安装包。** 本仓库打出的 `0.1.8 (build 9)` APK 的 manifest 里同时有 `INTERNET` 和 `POST_NOTIFICATIONS`；旧包没有后者，Android 13+ 的通知页就会把开关画成灰的、点不动。用 `app/.nsh/out/Navigator.apk` 覆盖安装（`adb install -r`，保留数据），再打开 App 看「连到 Mac → 通知」。如果版本已经是 0.1.8 但开关仍灰，检查这台手机上领航是不是被停用、被工作资料/家长控制限制，或装在另一个用户下；用下面的命令能看到实际装的是哪个包、有没有声明权限：
 
 ```sh
 adb shell dumpsys package com.lele.navigator | grep -E 'versionName|versionCode|POST_NOTIFICATIONS'
@@ -49,7 +50,7 @@ adb shell cmd appops get com.lele.navigator POST_NOTIFICATION
 adb shell pm grant com.lele.navigator android.permission.POST_NOTIFICATIONS
 ```
 
-**仍然没有“App 关闭时到点提醒”。** 新 API 只有 `show`，没有 `schedule(at:)` 或 `AlarmManager` 一类的后台唤醒；手机在 App 没运行时不会在截止时刻自己醒来。提前提醒和通知上的「完成 / 推迟 1 小时」两枚按钮也仍只在 Mac 上。
+**仍然没有“App 关闭时到点提醒”。** 新 API 只有 `show`，没有 `schedule(at:)` 或 `AlarmManager` 一类的后台唤醒；手机在 App 没运行时不会在截止时刻自己醒来，也发不了每小时重复。提前提醒和通知上的「完成 / 推迟 1 小时」两枚按钮也仍只在 Mac 上。
 
 **开发/测试进程没有通知中心。** `nsh test` 的 runner 是没有 bundle 的裸可执行文件，`currentNotificationCenter` 会抛 Objective-C 异常直接 abort 进程。所以调用前先看 `NSBundle.mainBundle().bundleIdentifier()`，再用 `objc2::exception::catch` 兜一层——无头跑测试不会因此崩，端口和测试都不受影响。
 
@@ -57,11 +58,11 @@ adb shell pm grant com.lele.navigator android.permission.POST_NOTIFICATIONS
 
 ## OTA 更新
 
-App 的 TSX 可以作为签名包（`.nshpkg`）从 GitHub Release 下发，不用每次重新装 APK。**装一次 `0.1.7 (build 8)` 的 APK 之后**，只改界面、逻辑、图片和字体都可以走 OTA；改 Rust crate、nsh runtime、权限或 manifest 仍然要出新 APK。
+App 的 TSX 可以作为签名包（`.nshpkg`）从 GitHub Release 下发，不用每次重新装 APK。**装一次 `0.1.8 (build 9)` 的 APK 之后**，只改界面、逻辑、图片和字体都可以走 OTA；改 Rust crate、nsh runtime、权限或 manifest 仍然要出新 APK。
 
 - `app/nsh.json` 的 `updater` 指向 `dongjiahong/navigator` 的最新 Release，并写了两个公钥：`publicKey` 验 `latest.json`，`packages.roots` 验 `.nshpkg`。
 - 签名私钥在仓库外：`~/.navigator-ota/`（`root.secret` 离线保存；`release.secret`、`release.cert`、`update.secret` 用于发版）。**不要把任何 `.secret` 提交进仓库。**
-- 没有 CI：发版全在本机。跑 `scripts/ota-release.sh --build 8 --notes CHANGES.md`，把 `dist/*.nshpkg`、`dist/latest.json`、`dist/latest.json.sig` 三个文件连同 APK 一起传到 GitHub Release（顺序：包先，manifest 和签名后）。
+- 没有 CI：发版全在本机。跑 `scripts/ota-release.sh --build 9 --notes CHANGES.md`，把 `dist/*.nshpkg`、`dist/latest.json`、`dist/latest.json.sig` 三个文件连同 APK 一起传到 GitHub Release（顺序：包先，manifest 和签名后）。
 - 每次发版都要把 `app/nsh.json` 的 `build` 加一；`version` 也一起改。App 只在包比当前 build 新时才装。
 - App 启动后 5 秒检查一次；手机在「连到 Mac」Sheet 里还有「检查更新」。Android/iOS 下载后**下次冷启动**运行，桌面可以按「重启」立刻运行。包第一次运行有 10 秒试用期，起不来会自动回退。
 

@@ -114,7 +114,7 @@ pub fn stamp(item: &Value) -> i64 {
 /// `app/fields.ts`: `id` is the key rather than a value, and everything else a
 /// card holds — including `deleted`, `rank` and `repeat` — is a field both
 /// devices may have written.
-const MERGE_FIELDS: [&str; 8] = ["title", "notes", "tags", "due", "repeat", "status", "deleted", "rank"];
+const MERGE_FIELDS: [&str; 9] = ["title", "notes", "tags", "due", "repeat", "images", "status", "deleted", "rank"];
 
 /// When one field of a card was last written.
 ///

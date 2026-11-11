@@ -72,7 +72,14 @@ export function spawnSuccessors(at = Date.now()): string[] {
   if (!wanted.length) return [];
   const drafts: { card: Draft; id?: string }[] = wanted.map((next) => ({
     id: next.id,
-    card: { title: next.title, notes: next.notes, tags: next.tags, due: next.due, repeat: next.repeat },
+    card: {
+      title: next.title,
+      notes: next.notes,
+      tags: next.tags,
+      due: next.due,
+      repeat: next.repeat,
+      images: next.images,
+    },
   }));
   // One write for the whole pass: the board changes once, so the effect that is
   // watching it runs once more and finds nothing left to do.

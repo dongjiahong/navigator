@@ -1269,6 +1269,9 @@ const ID_PREFIX: &str = "navigator.card.";
 const CATEGORY: &str = "navigator.reminder";
 /// The suffix of the early reminder, the one that fires ahead of a deadline.
 const EARLY: &str = ".pre";
+/// The suffix of the overdue reminder, the one that comes back every hour
+/// until the work is finished or filed.
+const HOURLY: &str = ".hourly";
 
 /// The identifier the system knows one reminder by: the deadline's own
 /// notification is the bare card id, and the early one adds `.pre`, so the two
@@ -1280,6 +1283,12 @@ fn identifier_text(id: &str) -> String {
 /// The card an identifier names, and whether it was the early reminder.
 fn card_of(identifier: &str) -> Option<(String, bool)> {
     let rest = identifier.strip_prefix(ID_PREFIX)?;
+    // The overdue card's reminder repeats under its own suffix, and a press on
+    // one is a press on the card like any other: the suffix is not part of the
+    // id the board knows.
+    if let Some(id) = rest.strip_suffix(HOURLY) {
+        return Some((id.to_owned(), false));
+    }
     match rest.strip_suffix(EARLY) {
         Some(id) => Some((id.to_owned(), true)),
         None => Some((rest.to_owned(), false)),
@@ -1390,6 +1399,25 @@ impl Reminder {
         #[allow(unreachable_code)]
         {
             let _ = (id, title, body, at);
+            Err("this platform cannot post a notification".to_owned())
+        }
+    }
+
+    /// Schedules a notification that comes back every `every` seconds, until it
+    /// is cancelled, replacing whatever was pending under the same id.
+    ///
+    /// A deadline that has passed is still work that has not been done, and an
+    /// app that is closed cannot go on saying so. A repeating request is the
+    /// one kind of reminder that keeps speaking without the app running, the
+    /// same way the deadline's own reminder does.
+    pub fn repeat(id: String, title: String, body: String, every: f64) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        {
+            return macos::repeat(&id, &title, &body, every);
+        }
+        #[allow(unreachable_code)]
+        {
+            let _ = (id, title, body, every);
             Err("this platform cannot post a notification".to_owned())
         }
     }
@@ -1767,6 +1795,54 @@ mod macos {
                 // thread the system calls back on, and only text is kept.
                 let text = unsafe { error.as_ref().localizedDescription().to_string() };
                 eprintln!("reminder: the system refused a notification: {text}");
+            }
+        });
+        center.addNotificationRequest_withCompletionHandler(&request, Some(&block));
+
+        Ok(())
+    }
+
+    /// Schedules a notification the system repeats every `every` seconds until
+    /// the request is cancelled, replacing whatever was pending under the id.
+    ///
+    /// `repeats: true` makes the interval the delay to the first firing as well
+    /// as the period between them, so the first repeat is one interval out
+    /// rather than at the deadline: the deadline's own notification marks the
+    /// moment, and this one goes on after it, from a card that is still open.
+    pub fn repeat(id: &str, title: &str, body: &str, every: f64) -> Result<(), String> {
+        let Some(center) = center() else {
+            return Err("this process cannot post a notification".to_owned());
+        };
+        // A trigger under a minute would be a notification every few seconds,
+        // and a negative or absurd one is a mistake rather than a reminder.
+        if !(every.is_finite() && (60.0..=7.0 * 24.0 * 3600.0).contains(&every)) {
+            return Ok(());
+        }
+
+        let content = UNMutableNotificationContent::new();
+        content.setTitle(&NSString::from_str(if title.is_empty() { "已逾期" } else { title }));
+        if !body.is_empty() {
+            content.setBody(&NSString::from_str(body));
+        }
+        content.setSound(Some(&UNNotificationSound::defaultSound()));
+        // The same category as the deadline's, so the repeating notification
+        // carries the same 完成 and 推迟 1 小时 buttons.
+        content.setCategoryIdentifier(&NSString::from_str(CATEGORY));
+
+        let trigger =
+            UNTimeIntervalNotificationTrigger::triggerWithTimeInterval_repeats(every, true);
+        let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
+            &identifier(id),
+            &content,
+            Some(&trigger),
+        );
+
+        let block = block2::RcBlock::new(move |error: *mut NSError| {
+            if let Some(error) = std::ptr::NonNull::new(error) {
+                // `NSError` is not `Send`, so the message is read here, on the
+                // thread the system calls back on, and only text is kept.
+                let text = unsafe { error.as_ref().localizedDescription().to_string() };
+                eprintln!("reminder: the system refused a repeating notification: {text}");
             }
         });
         center.addNotificationRequest_withCompletionHandler(&request, Some(&block));

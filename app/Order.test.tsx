@@ -37,6 +37,27 @@ test("a column is shown in rank order, not in the order of the array", () => {
   expect(orderOf(cards(), "todo")).toBe("a,b");
 });
 
+test("a column shows the nearest deadline first, and overdue work above it", () => {
+  // What needs doing is the question a column answers, and a card due in an
+  // hour is that answer before a card with no date at all. An overdue card is
+  // the top of the column: it is the one already late.
+  cards.set([
+    card("none", { rank: 1000 }),
+    card("later", { rank: 2000, due: "2026-12-01T09:00" }),
+    card("overdue", { rank: 3000, due: "2026-11-01T09:00" }),
+    card("soon", { rank: 4000, due: "2026-11-12T09:00" }),
+  ]);
+  expect(ids()).toEqual(["overdue", "soon", "later", "none"]);
+
+  // The undated ones keep the order the user gave them, after every dated one.
+  cards.set([
+    card("b", { rank: 2000 }),
+    card("a", { rank: 1000 }),
+    card("today", { rank: 3000, due: "2026-11-12T09:00" }),
+  ]);
+  expect(ids()).toEqual(["today", "a", "b"]);
+});
+
 test("two cards on one rank are ordered by id, so both devices agree", () => {
   // A status pressed on the phone can land a card on a rank the column already
   // holds: the tie has to be broken by something both devices have.

@@ -1,7 +1,15 @@
 import { expect, test } from "nsh/test";
 import { openSized } from "./testkit";
 import { epochOf, remindsAt, type Card } from "./data";
-import { SPREAD_MS, applyResponse, reminderPlan, spreadMoments } from "./deadline";
+import {
+  HOURLY_MS,
+  SPREAD_MS,
+  applyResponse,
+  hourlyDue,
+  overdueNow,
+  reminderPlan,
+  spreadMoments,
+} from "./deadline";
 import { openApp } from "./testkit";
 
 /**
@@ -97,6 +105,34 @@ test("cards due at the same moment are handed over a banner apart", () => {
   expect(slots.map((slot) => slot.at)).toEqual([at, at, at, anHourOn]);
 });
 
+test("overdue work asks again an hour after the deadline, and keeps asking", () => {
+  const due = "2026-11-12T09:00";
+  const at = epochOf(due);
+  const open = card({ due });
+
+  // A deadline ahead is not overdue; the deadline itself is the boundary.
+  expect(overdueNow(open, at - 1)).toBe(false);
+  expect(overdueNow(open, at)).toBe(true);
+  expect(overdueNow(open, at + HOURLY_MS)).toBe(true);
+
+  // Finished, filed and removed work is not overdue whatever the clock says.
+  expect(overdueNow(card({ due, status: "done" }), at + 1)).toBe(false);
+  expect(overdueNow(card({ due, status: "archive" }), at + 1)).toBe(false);
+  expect(overdueNow(card({ due, deleted: true }), at + 1)).toBe(false);
+  expect(overdueNow(card(), at + 1)).toBe(false);
+
+  // The first repeat is the hour after the deadline, not the deadline itself:
+  // the deadline's own notification said that.
+  expect(hourlyDue(open, at + 59 * 60_000)).toBe(false);
+  expect(hourlyDue(open, at + HOURLY_MS)).toBe(true);
+  // Having spoken, it waits its hour again — measured from the last time it
+  // was heard, so a dismissed banner does not return on the next tick.
+  expect(hourlyDue(open, at + HOURLY_MS + 30 * 60_000, at + HOURLY_MS)).toBe(false);
+  expect(hourlyDue(open, at + 2 * HOURLY_MS, at + HOURLY_MS)).toBe(true);
+  // An hour late is not an hour of speaking: the deadline is the start.
+  expect(hourlyDue(open, at + 30 * 60_000, at + 30 * 60_000)).toBe(false);
+});
+
 test("an answer does what it says, and nothing for a card that is gone", () => {
   const now = new Date(2026, 10, 12, 12, 34, 30, 120).getTime();
   const open = card({ id: "a" });
@@ -176,6 +212,27 @@ test("the command field is where the lead time is chosen", async () => {
   texts = app.texts();
   current = texts.indexOf("当前");
   expect(texts[current - 1]).toBe("提前提醒：15 分钟");
+});
+
+test("the phone says an overdue card an hour after its deadline", async () => {
+  // c3 is due today at 20:00. Opening at 21:02 has passed the hour its first
+  // overdue reminder falls on; the deadline's own banner was for 20:00.
+  const at = new Date();
+  at.setHours(21, 2, 0, 0);
+  const app = await openSized(390, 844, { clock: { time: at.getTime() } });
+  if (!app) return;
+  expect(app.shows("id:phone-home")).toBe(true);
+
+  await app.wait(21_000);
+  expect(app.shows("id:due-banner")).toBe(true);
+  expect(app.shows("id:due-banner >> text:写周报")).toBe(true);
+
+  // Put away, the card just answered is quiet again until its next hour: a
+  // line that follows is another overdue card, not this one coming straight
+  // back on the next tick.
+  await app.press("label:知道了");
+  await app.wait(21_000);
+  expect(app.shows("id:due-banner >> text:写周报")).toBe(false);
 });
 
 test("the phone shows a banner when a deadline comes due while it is open", async () => {

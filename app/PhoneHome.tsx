@@ -50,6 +50,8 @@ import {
   DueEditor,
   Icon,
   IconButton,
+  ImageAttachments,
+  ImageMark,
   NoteLinks,
   NotePreview,
   SearchField,
@@ -59,6 +61,7 @@ import {
   alpha,
   clearArchive,
   clearSamples,
+  withPastedImages,
 } from "./ui";
 import { fieldHeight } from "./text";
 import { hueColor, theme, onAccentFill, onAccentWash, TYPE } from "./theme";
@@ -101,6 +104,7 @@ const capturing = signal(false);
 const draftTitle = signal("");
 const draftTags = signal<string[]>([]);
 const draftDue = signal<string | undefined>(undefined);
+const draftImages = signal<string[]>([]);
 /** The sheet where the phone is told which Mac to follow. */
 const linking = signal(false);
 const draftAddress = signal("");
@@ -398,7 +402,7 @@ function PhoneRow(props: { card: () => Card }) {
             {c().title || "未命名卡片"}
           </Text>
           {preview().length > 0 ? <NotePreview notes={c().notes} size="phone" lines={1} /> : null}
-          {c().tags.length > 0 || c().due || list().total > 0 ? (
+          {c().tags.length > 0 || c().due || list().total > 0 || (c().images?.length ?? 0) > 0 ? (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 11, flexWrap: "wrap", marginTop: 1 }}>
               {c().tags.length > 0 ? <TagRow ids={c().tags} size="phone" /> : null}
               {c().due ? <DueBadge iso={c().due ?? ""} size="phone" settled={settled()} /> : null}
@@ -406,6 +410,7 @@ function PhoneRow(props: { card: () => Card }) {
                 <Icon name="repeat" size={12.5} tint={theme().textTertiary} width={1.9} />
               ) : null}
               <ChecklistProgress notes={c().notes} size="phone" />
+              {c().images?.length ? <ImageMark count={c().images!.length} size="phone" /> : null}
             </View>
           ) : null}
         </View>
@@ -484,6 +489,7 @@ function CaptureSheet() {
           draftTitle.set("");
           draftTags.set([]);
           draftDue.set(undefined);
+          draftImages.set([]);
         }
       }}
       closeOnSwipe
@@ -509,6 +515,12 @@ function CaptureSheet() {
           value={draftTitle()}
           placeholder="要做什么？"
           onChange={({ value }) => draftTitle.set(value)}
+          onPaste={(e) => {
+            if (!e.files.length) return;
+            void withPastedImages(draftImages(), e.files).then((next) => {
+              if (next) draftImages.set(next);
+            });
+          }}
           style={{
             fontSize: 18,
             fontWeight: "500",
@@ -526,6 +538,7 @@ function CaptureSheet() {
             pressed on the phone's capture sheet did nothing at all. */}
         <TagPicker selected={draftTags()} onChange={(ids) => draftTags.set(ids)} size="phone" />
         <DueEditor due={draftDue()} size="phone" onChange={(iso) => draftDue.set(iso)} />
+        <ImageAttachments images={draftImages()} onChange={(next) => draftImages.set(next)} size="phone" />
         {/* The switch is `nsh/base`'s: presses, keyboard activation and the
             switch role and value come with it, and the two parts are the app's
             own. The thumb travels the track's inner width, and the colour and
@@ -571,8 +584,12 @@ function CaptureSheet() {
           onPress={() => {
             const text = draftTitle().trim();
             if (!text) return;
-            addCard({ title: text, notes: "", tags: draftTags(), due: draftDue() });
+            addCard({ title: text, notes: "", tags: draftTags(), due: draftDue(), images: draftImages() });
             draftTitle.set("");
+            // A picture belongs to the card it was taken for, so the next one
+            // starts blank even under 连续添加: tags and the deadline are what a
+            // batch shares.
+            draftImages.set([]);
             if (keepAdding()) {
               // The sheet stays up for the next card. Tags and the deadline stay
               // as they were: a batch shares them, and re-picking them for every
@@ -695,6 +712,12 @@ function DetailBody(props: { id: string }) {
           value={c().title}
           placeholder="要做什么？"
           onChange={({ value }) => patchCard(id, { title: value })}
+          onPaste={(e) => {
+            if (!e.files.length) return;
+            void withPastedImages(c().images ?? [], e.files).then((next) => {
+              if (next) patchCard(id, { images: next });
+            });
+          }}
           style={{
             fontSize: 20,
             fontWeight: "600",
@@ -716,6 +739,12 @@ function DetailBody(props: { id: string }) {
             value={c().notes}
             placeholder="补充细节、链接、下一步…"
             onChange={({ value }) => patchCard(id, { notes: value })}
+            onPaste={(e) => {
+              if (!e.files.length) return;
+              void withPastedImages(c().images ?? [], e.files).then((next) => {
+                if (next) patchCard(id, { images: next });
+              });
+            }}
             style={{
               fontSize: 15,
               lineHeight: 22,
@@ -775,6 +804,11 @@ function DetailBody(props: { id: string }) {
           // A deadline cleared takes the cycle with it: nothing to repeat from.
           onChange={(iso) => patchCard(c().id, iso ? { due: iso } : { due: undefined, repeat: undefined })}
           onRepeatChange={(next) => patchCard(c().id, { repeat: next })}
+        />
+        <ImageAttachments
+          images={c().images ?? []}
+          onChange={(next) => patchCard(c().id, { images: next })}
+          size="phone"
         />
         <View style={{ flexDirection: "row", gap: 18, paddingTop: 6 }}>
           <View

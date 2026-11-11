@@ -1,7 +1,7 @@
 import { Text, View, createMotion, effect, signal, windowSize, type InputRef } from "nsh";
 import { Dialog, Input } from "nsh/base";
 import { COLUMNS, cards, patchCard, removeWithUndo, type Card, type Status } from "./data";
-import { DueEditor, IconButton, NoteLinks, NoteView, TagPicker, alpha } from "./ui";
+import { DueEditor, IconButton, ImageAttachments, NoteLinks, NoteView, TagPicker, alpha, withPastedImages } from "./ui";
 import { charsPerLine, fieldHeight } from "./text";
 import { noteHeight as heightOfNote, panelSize } from "./panel";
 import { theme, onAccentWash, TYPE } from "./theme";
@@ -83,6 +83,16 @@ export function Inspector(props: {
     // in it, and a key that follows the press has somewhere to go.
     noteField?.focus();
   };
+  // A screenshot pasted into the title or the note becomes the card's picture.
+  // The text of the paste still goes in as the field's own: only the files are
+  // taken out here, and a paste with no picture is left alone.
+  const pasteImages = (files: readonly File[]) => {
+    if (!files.length) return;
+    const id = card().id;
+    void withPastedImages(card().images ?? [], files).then((next) => {
+      if (next) patchCard(id, { images: next });
+    });
+  };
   // A short rise as the panel arrives. It moves the panel by a few points and
   // does not touch its opacity — `Dialog` already fades it in, and two fades on
   // one surface read as a slow one.
@@ -159,6 +169,7 @@ export function Inspector(props: {
           value={card().title}
           placeholder="要做什么？"
           onChange={({ value }) => patchCard(card().id, { title: value })}
+          onPaste={(e) => pasteImages(e.files)}
           style={{
             ...TYPE.inspectorTitle,
             color: theme().text,
@@ -226,6 +237,13 @@ export function Inspector(props: {
             onChange={(iso) => patchCard(card().id, iso ? { due: iso } : { due: undefined, repeat: undefined })}
             onRepeatChange={(next) => patchCard(card().id, { repeat: next })}
           />
+
+          {/* A picture is a card's own material, like the note: the strip sits
+              in the meta block, above the note whose height it narrows. */}
+          <ImageAttachments
+            images={card().images ?? []}
+            onChange={(next) => patchCard(card().id, { images: next })}
+          />
         </View>
 
         {/* The note, and the rest of the panel's height. The box around the
@@ -260,6 +278,7 @@ export function Inspector(props: {
               value={card().notes}
               placeholder="补充细节、链接、下一步…"
               onChange={({ value }) => patchCard(card().id, { notes: value })}
+              onPaste={(e) => pasteImages(e.files)}
               // The press on the note reveals the field (`editNote`); leaving
               // the field puts the reading back. The field does not reveal
               // itself on focus: it is mounted under the reading all along, and

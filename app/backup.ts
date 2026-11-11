@@ -118,6 +118,9 @@ function markdownCard(card: Card, label: (id: string) => string): string[] {
   const names = card.tags.map(label).filter((name) => name.length > 0);
   if (names.length) parts.push(names.map((name) => `#${name}`).join(" "));
   if (card.due) parts.push(`截止 ${card.due.replace("T", " ")}`);
+  // Markdown carries the row, not the picture: a base64 image in a list would
+  // be a paragraph of noise. The count says the picture is on the board.
+  if (card.images?.length) parts.push(`图 ${card.images.length} 张`);
   const box = card.status === "done" || card.status === "archive" ? "x" : " ";
   const out = [`- [${box}] ${parts.join(" · ")}`];
   for (const line of card.notes.split("\n")) {
@@ -148,6 +151,15 @@ function asCard(item: unknown): Card | null {
   // version's: either way it is dropped rather than carried as a word nothing
   // reads.
   if (card.due && REPEATS.some((r) => r === row.repeat)) card.repeat = row.repeat as Repeat;
+  // Pictures travel as data URLs, so a restored card comes back with them. A
+  // row from another app or a hand-edited file is filtered rather than trusted:
+  // only an image data URL is something an `<Image>` can show.
+  if (Array.isArray(row.images)) {
+    const images = row.images.filter(
+      (src): src is string => typeof src === "string" && src.startsWith("data:image/"),
+    );
+    if (images.length) card.images = images;
+  }
   // A file that came out of the daily snapshot carries tombstones, and they are
   // kept: merging one back has to know which ids were removed.
   if (row.deleted === true) card.deleted = true;
@@ -253,7 +265,8 @@ function sameCard(a: Card, b: Card): boolean {
     a.status === b.status &&
     (a.due ?? "") === (b.due ?? "") &&
     (a.repeat ?? "") === (b.repeat ?? "") &&
-    a.tags.join("\u0000") === b.tags.join("\u0000")
+    a.tags.join("\u0000") === b.tags.join("\u0000") &&
+    (a.images ?? []).join("\u0000") === (b.images ?? []).join("\u0000")
   );
 }
 

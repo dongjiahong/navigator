@@ -1,11 +1,14 @@
 import { Notifications, effect, platform, signal } from "nsh";
 import { Reminder } from "app/native";
-import { board, epochOf, patchCard, remindsAt, setStatus } from "./data";
+import { board, dueTimeOf, epochOf, patchCard, remindsAt, setStatus } from "./data";
 import {
+  HOURLY_MS,
   applyResponse,
   earlyBody,
+  hourlyDue,
   leadMinutes,
   loadLead,
+  overdueNow,
   reminderPlan,
   spreadMoments,
   type Response,
@@ -213,6 +216,13 @@ export function installReminders(): void {
  */
 const EARLY = ".pre";
 
+/**
+ * The overdue reminder is its own request too: a repeating one under this
+ * suffix, so the deadline's one-shot slot and the hourly one never replace
+ * each other.
+ */
+const HOURLY = ".hourly";
+
 /** What has been handed to the system, so an unchanged card is not re-sent. */
 const pending = new Map<string, string>();
 /** A stamp no card matches, so a slot is sent again on the next pass. */
@@ -273,6 +283,23 @@ export function syncReminders(): void {
     wants.set(slot.key, { at: slot.at, stamp: `${slot.at}|${slot.words}`, title: slot.title, body: slot.body });
   }
 
+  // Overdue work asks again every hour, under a request of its own. A repeating
+  // request is the one reminder the system keeps saying while the app is shut,
+  // which is what an overdue card needs: the deadline's own notification has
+  // already come and gone.
+  const hourly = new Map<string, { stamp: string; title: string; body: string }>();
+  for (const card of board()) {
+    if (!overdueNow(card, now)) continue;
+    const title = card.title || "未命名卡片";
+    hourly.set(`${card.id}${HOURLY}`, {
+      // Notes are in the body but not in the words: a keystroke in them would
+      // otherwise re-send a repeating request per letter.
+      stamp: `${card.due}|${card.title}`,
+      title: `已逾期：${title}`,
+      body: (card.notes.trim() || `截止 ${dueTimeOf(card.due!)}`).slice(0, 120),
+    });
+  }
+
   for (const [key, want] of wants) {
     if (pending.get(key) === want.stamp) continue;
     try {
@@ -283,8 +310,17 @@ export function syncReminders(): void {
       // board; the card still shows its overdue pill.
     }
   }
+  for (const [key, want] of hourly) {
+    if (pending.get(key) === want.stamp) continue;
+    try {
+      Reminder.repeat(key, want.title, want.body, HOURLY_MS / 1000);
+      pending.set(key, want.stamp);
+    } catch {
+      // Same: the board does not depend on the system agreeing.
+    }
+  }
   for (const key of [...pending.keys()]) {
-    if (wants.has(key)) continue;
+    if (wants.has(key) || hourly.has(key)) continue;
     try {
       Reminder.cancel(key);
     } catch {
@@ -344,8 +380,65 @@ function checkDue() {
 
 export function dismissDue(): void {
   const shown = dueNow();
-  if (shown) dismissed.add(shown.id);
+  if (shown) {
+    dismissed.add(shown.id);
+    // The hour is counted from the dismissal: a card the user has just put away
+    // should not come back on the next twenty-second tick.
+    spoken.set(shown.id, Date.now());
+  }
   dueNow.set(null);
+}
+
+/**
+ * When each overdue card last spoke, so its hour is measured per card.
+ * In memory only: a launch is a fresh look, and a card still overdue speaks at
+ * the first hour that has passed.
+ */
+const spoken = new Map<string, number>();
+
+/**
+ * The overdue card's hourly reminder, for the place the system holds no
+ * schedule — the phone, and a Mac whose permission was refused.
+ *
+ * The Mac with the permission lets `UNUserNotificationCenter` repeat the
+ * request instead (`syncReminders`), because it keeps speaking with the app
+ * closed. The phone has no such API, so its reminder is this loop: an overdue
+ * card whose hour has come round is handed to the system again, or put on the
+ * one line over the list when no notification can be shown. It stops the moment
+ * the card is done, filed, removed or no longer overdue, because the board is
+ * the question and `hourlyDue` reads the card.
+ */
+function checkOverdue() {
+  if (systemReminders()) return;
+  if (platform.os === "android" && reminderState() === "unknown") return;
+  const now = Date.now();
+  const ready = board().filter((card) => hourlyDue(card, now, spoken.get(card.id)));
+  if (!ready.length) return;
+  if (platform.os === "android" && reminderState() === "granted") {
+    // The system stacks one notification per card, so each overdue card that
+    // has come round is handed over under its own id.
+    for (const card of ready) {
+      spoken.set(card.id, now);
+      const title = card.title || "未命名卡片";
+      void Notifications.show({
+        id: `${PREFIX}${card.id}`,
+        title: `已逾期：${title}`,
+        body: (card.notes.trim() || `截止 ${dueTimeOf(card.due!)}`).slice(0, 120),
+      }).catch(() => {
+        reminderState.set("unsupported");
+        dueNow.set({ id: card.id, title });
+      });
+    }
+    return;
+  }
+  // One line at a time: a card whose hour has just come round waits for the
+  // line to clear rather than replacing what the user is reading. The most
+  // recently due is the hour that has this moment passed.
+  if (dueNow()) return;
+  ready.sort((a, b) => epochOf(b.due!) - epochOf(a.due!));
+  const card = ready[0];
+  spoken.set(card.id, now);
+  dueNow.set({ id: card.id, title: card.title || "未命名卡片" });
 }
 
 /** Applies one answer to the board. */
@@ -447,10 +540,14 @@ async function reconcile(): Promise<void> {
     const lead = leadMinutes();
     const wanted = new Set<string>();
     for (const card of board()) {
-      if (!remindsAt(card, now)) continue;
-      const plan = reminderPlan(card, now, lead);
-      if (plan.at !== undefined) wanted.add(card.id);
-      if (plan.pre !== undefined) wanted.add(`${card.id}${EARLY}`);
+      if (remindsAt(card, now)) {
+        const plan = reminderPlan(card, now, lead);
+        if (plan.at !== undefined) wanted.add(card.id);
+        if (plan.pre !== undefined) wanted.add(`${card.id}${EARLY}`);
+      }
+      // An overdue card's repeating request is wanted whether or not it ever
+      // had a deadline slot of its own: it is the reminder that outlives it.
+      if (overdueNow(card, now)) wanted.add(`${card.id}${HOURLY}`);
     }
     for (const id of held) {
       if (wanted.has(id)) continue;
@@ -504,12 +601,16 @@ export function startReminders(): void {
     await reconcile();
   })();
   checkDue();
+  checkOverdue();
   // The Mac's notification answers are polled; the phone's arrive through
   // `Notifications.on` instead, registered in `installReminders`.
   if (platform.os !== "android") takeResponses();
   setInterval(() => {
     syncReminders();
     checkDue();
+    // Overdue work keeps asking, once an hour, wherever the system holds no
+    // schedule of its own.
+    checkOverdue();
   }, TICK_MS);
   // A card whose deadline is set for later today gets its reminder as soon as it
   // is edited, and the lead time reaches every card as soon as it is chosen: the

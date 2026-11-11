@@ -3,7 +3,7 @@ import { cards, COLUMNS, moveCard, setStatus, type Card, type Status } from "./d
 import { parseChecklist, previewLines } from "./checklist";
 import { filteredBoard, isFiltering } from "./filters";
 import { clearFocus, lists } from "./focus";
-import { ChecklistProgress, DueBadge, Icon, IconButton, NotePreview, TagRow, clearArchive } from "./ui";
+import { ChecklistProgress, DueBadge, Icon, IconButton, ImageMark, NotePreview, TagRow, clearArchive } from "./ui";
 import { theme, TYPE } from "./theme";
 import { COL_GAP, COL_MAX, HDR_H, PAD_X, PAD_Y, ROW_GAP, ROW_TOP, boardGeom } from "./geom";
 
@@ -371,7 +371,7 @@ function CardView(props: {
       {preview().length > 0 ? (
         <NotePreview notes={card().notes} />
       ) : null}
-      {card().tags.length > 0 || card().due || list().total > 0 ? (
+      {card().tags.length > 0 || card().due || list().total > 0 || (card().images?.length ?? 0) > 0 ? (
         <View
           style={{
             flexDirection: "row",
@@ -390,6 +390,7 @@ function CardView(props: {
             <Icon name="repeat" size={11.5} tint={theme().textTertiary} width={1.9} />
           ) : null}
           <ChecklistProgress notes={card().notes} />
+          {card().images?.length ? <ImageMark count={card().images!.length} /> : null}
         </View>
       ) : null}
     </View>

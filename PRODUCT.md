@@ -41,12 +41,19 @@ on the phone.
 ## Capabilities and Constraints
 
 - Columns are fixed at four: 待办, 进行中, 已完成, 归档.
-- Card fields: title, tags, notes, due date and time of day, and a repeat cycle
+- Card fields: title, tags, notes, due date and time of day, up to three pictures,
+  and a repeat cycle
   (每天 / 每周 / 每月 / 每年) that brings the work back: finishing a repeating card puts
   the next occurrence at the foot of 待办, at the deadline advanced by one cycle. The
   cycle goes with the deadline — a card with no date cannot repeat, and clearing the
   date clears the cycle in the same write — and a month or a year that lands on a
   shorter month clamps to that month's end.
+- Pictures are picked from the system's picker or pasted into a title or note. They
+  live on the card as `data:` URLs, so they sync, export and back up with it; the
+  board shows only a glyph and a count, and the panel or sheet shows the tiles.
+- A column is ordered by deadline: the nearest due time is at the top and an
+  overdue card above everything still ahead. Cards with no deadline keep the order
+  the user dragged them into, after the dated ones.
 - A checklist is not a field: `- [ ] ` and `- [x] ` lines in the notes are the list, so
   a list typed on the phone and edited on the Mac merges, exports and syncs as the note
   it already is. A card shows only a check glyph and how much of it is ticked (`2/5`), and ticking is an
@@ -54,10 +61,10 @@ on the phone.
 - A deadline reached while its card is still open notifies: a system notification
   with sound on the Mac, delivered even after the app quits; a banner inside the
   app on the phone, where Android would drop a notification the manifest cannot
-  request. A finished, archived or deleted card drops its reminder, and a date
-  that has already passed is shown as overdue rather than notified. On the Mac a
-  card may also carry a lead reminder ahead of its deadline, and a reminder offers
-  完成 and 推迟 1 小时 without opening the app.
+  request. A finished, archived or deleted card drops its reminder. An overdue
+  card that is still open keeps reminding, once an hour, until it is done or
+  filed. On the Mac a card may also carry a lead reminder ahead of its deadline,
+  and a reminder offers 完成 and 推迟 1 小时 without opening the app.
 - A single destructive press is reversible, not interrogated: deleting, finishing
   and archiving a card leave one line offering 撤销 for a few seconds. Only a batch
   — 清空归档, 清除示例数据 — asks first, naming how many cards it will remove, and

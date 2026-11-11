@@ -28,6 +28,16 @@ export type Card = {
    * from, so the two go together: clearing the deadline clears this too.
    */
   repeat?: Repeat;
+  /**
+   * Pictures attached to the card, as `data:` URLs.
+   *
+   * A data URL rather than a path keeps the picture with the card it belongs to:
+   * it syncs through the same row the title does, rides in an export, and cannot
+   * be a file the other device does not have. The picker scales one down before
+   * it gets here, so a card carries a glance-sized copy rather than a camera
+   * original.
+   */
+  images?: string[];
   status: Status;
   /**
    * Where the card sits in its column, ascending. It is data, not a local
@@ -516,12 +526,31 @@ export function byRank(a: Card, b: Card): number {
 /** Each column's place in the board, for a card whose status is not one of them. */
 const COLUMN_OF = new Map<Status, number>(COLUMNS.map((c, i) => [c.id, i]));
 
-/** The board in the order it shows: column by column, each by rank. */
+/**
+ * The order a column shows: the nearest deadline first, and overdue work at the
+ * very top.
+ *
+ * A card with a deadline outranks one without: the board's job is to say what
+ * needs doing next, and a card due in twenty minutes is that answer before a
+ * card with no date at all. Deadlines sort ascending, so a card that has been
+ * late since morning comes before one that is only slightly late, and both come
+ * before anything still ahead. Cards with no deadline keep the rank the user
+ * gave them, after every dated card, so dragging still orders the undated part
+ * of a column without fighting the clock.
+ */
+export function byDue(a: Card, b: Card): number {
+  const da = a.due ? epochOf(a.due) : Number.POSITIVE_INFINITY;
+  const db = b.due ? epochOf(b.due) : Number.POSITIVE_INFINITY;
+  if (da !== db) return da < db ? -1 : 1;
+  return byRank(a, b);
+}
+
+/** The board in the order it shows: column by column, each by deadline then rank. */
 function sortBoard(all: readonly Card[]): Card[] {
   return [...all].sort((a, b) => {
     const ca = COLUMN_OF.get(a.status) ?? COLUMNS.length;
     const cb = COLUMN_OF.get(b.status) ?? COLUMNS.length;
-    return ca !== cb ? ca - cb : byRank(a, b);
+    return ca !== cb ? ca - cb : byDue(a, b);
   });
 }
 
@@ -533,7 +562,7 @@ export function byStatus(status: Status): Card[] {
  * The fields a card is made with. `status`, `rank` and the stamps are the
  * board's to give: a new card goes to 待办, at the foot of it.
  */
-export type Draft = Pick<Card, "title" | "notes" | "tags" | "due" | "repeat">;
+export type Draft = Pick<Card, "title" | "notes" | "tags" | "due" | "repeat" | "images">;
 
 /**
  * Cards made now, in one write.
@@ -606,7 +635,10 @@ export function moveCard(id: string, status: Status, index: number) {
     const card = all.find((c) => c.id === id);
     if (!card || card.deleted) return all;
     const rest = all.filter((c) => c.id !== id);
-    const column = rest.filter((c) => c.status === status && !c.deleted).sort(byRank);
+    // The drop's `index` counts the rows the column shows, and those are in
+    // deadline order: a rank placed against a rank-sorted list would put a
+    // dateless card somewhere the user did not drop it.
+    const column = rest.filter((c) => c.status === status && !c.deleted).sort(byDue);
     const others = rest.filter((c) => !(c.status === status && !c.deleted));
     const at = Math.max(0, Math.min(index, column.length));
     const before = rankOf(column[at - 1]!);
@@ -720,11 +752,18 @@ export function seedRanks(all: readonly Card[]): Card[] | null {
  *
  * 新建 opens a blank card to type into; closing that panel without typing
  * should leave the board exactly as it was, rather than a 「未命名卡片」 in 待办
- * that nobody decided to make. A title, a note, a tag or a deadline is what
- * makes it a card, and then it stays.
+ * that nobody decided to make. A title, a note, a tag, a deadline or a picture
+ * is what makes it a card, and then it stays.
  */
 export function isBlank(card: Card): boolean {
-  return !card.deleted && !card.title.trim() && !card.notes.trim() && card.tags.length === 0 && !card.due;
+  return (
+    !card.deleted &&
+    !card.title.trim() &&
+    !card.notes.trim() &&
+    card.tags.length === 0 &&
+    !card.due &&
+    (card.images?.length ?? 0) === 0
+  );
 }
 
 /** A way back from what just happened: at most one at a time. */
@@ -798,7 +837,7 @@ export function setStatus(id: string, status: Status): void {
   const before = card.status;
   // The row it held in the column it is leaving, so the way back puts it where
   // it was rather than at the foot of the column.
-  const row = cards().filter((c) => c.status === before && !c.deleted).sort(byRank).findIndex((c) => c.id === id);
+  const row = cards().filter((c) => c.status === before && !c.deleted).sort(byDue).findIndex((c) => c.id === id);
   patchCard(id, { status });
   if (status !== "done" && status !== "archive") return;
   // Finishing a repeating card also says when it comes back: the same
