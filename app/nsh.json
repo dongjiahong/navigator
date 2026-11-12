@@ -1,8 +1,8 @@
 {
   "name": "Navigator",
   "id": "com.lele.navigator",
-  "version": "0.1.8",
-  "build": 9,
+  "version": "0.1.9",
+  "build": 10,
   "icon": "icon.png",
   "rust": ".",
   "updater": {

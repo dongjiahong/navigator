@@ -37,7 +37,7 @@
         "rank": 1000,
         "deleted": false,
         "updatedAt": 30,
-        "stamps": { "title": 20, "notes": 30, "tags": 1, "due": 1, "repeat": 30, "status": 1, "rank": 1, "deleted": 1 }
+        "stamps": { "title": 20, "notes": 30, "tags": 1, "due": 1, "repeat": 30, "images": 30, "status": 1, "rank": 1, "deleted": 1 }
       }
     },
     {
@@ -68,7 +68,7 @@
         "status": "todo",
         "deleted": false,
         "updatedAt": 20,
-        "stamps": { "title": 20, "notes": 1, "tags": 1, "due": 20, "repeat": 20, "status": 1, "deleted": 1, "rank": -1 }
+        "stamps": { "title": 20, "notes": 1, "tags": 1, "due": 20, "repeat": 20, "images": 20, "status": 1, "deleted": 1, "rank": -1 }
       }
     },
     {
@@ -99,7 +99,7 @@
         "status": "todo",
         "deleted": false,
         "updatedAt": 5,
-        "stamps": { "title": 5, "notes": 5, "tags": 5, "due": 5, "repeat": 5, "status": 5, "deleted": 5, "rank": -1 }
+        "stamps": { "title": 5, "notes": 5, "tags": 5, "due": 5, "repeat": 5, "images": 5, "status": 5, "deleted": 5, "rank": -1 }
       }
     },
     {
@@ -128,7 +128,7 @@
         "status": "todo",
         "deleted": false,
         "updatedAt": 20,
-        "stamps": { "title": 20, "notes": 20, "tags": 20, "due": 20, "repeat": 20, "status": 20, "deleted": 20, "rank": -1 }
+        "stamps": { "title": 20, "notes": 20, "tags": 20, "due": 20, "repeat": 20, "images": 20, "status": 20, "deleted": 20, "rank": -1 }
       }
     },
     {
@@ -164,7 +164,7 @@
         "rank": 500,
         "deleted": true,
         "updatedAt": 30,
-        "stamps": { "title": 1, "notes": 20, "tags": 1, "due": 30, "repeat": 30, "status": 20, "rank": 1, "deleted": 30 }
+        "stamps": { "title": 1, "notes": 20, "tags": 1, "due": 30, "repeat": 30, "images": 30, "status": 20, "rank": 1, "deleted": 30 }
       }
     },
     {
@@ -197,7 +197,7 @@
         "status": "todo",
         "deleted": true,
         "updatedAt": 20,
-        "stamps": { "title": 1, "notes": 20, "tags": 1, "due": 20, "repeat": 20, "status": 1, "deleted": 10, "rank": -1 }
+        "stamps": { "title": 1, "notes": 20, "tags": 1, "due": 20, "repeat": 20, "images": 20, "status": 1, "deleted": 10, "rank": -1 }
       }
     },
     {
@@ -230,7 +230,7 @@
         "status": "todo",
         "deleted": false,
         "updatedAt": 40,
-        "stamps": { "title": 1, "notes": 1, "tags": 1, "due": 40, "repeat": 40, "status": 1, "deleted": 40, "rank": -1 }
+        "stamps": { "title": 1, "notes": 1, "tags": 1, "due": 40, "repeat": 40, "images": 40, "status": 1, "deleted": 40, "rank": -1 }
       }
     },
     {
@@ -266,7 +266,7 @@
         "rank": 2000,
         "deleted": false,
         "updatedAt": 7,
-        "stamps": { "title": 7, "notes": 7, "tags": 7, "due": 7, "repeat": 7, "status": 7, "rank": 7, "deleted": 7 }
+        "stamps": { "title": 7, "notes": 7, "tags": 7, "due": 7, "repeat": 7, "images": 7, "status": 7, "rank": 7, "deleted": 7 }
       }
     },
     {
@@ -302,7 +302,7 @@
         "rank": 500,
         "deleted": false,
         "updatedAt": 60,
-        "stamps": { "title": 1, "notes": 1, "tags": 1, "due": 60, "repeat": 60, "status": 1, "rank": 60, "deleted": 1 }
+        "stamps": { "title": 1, "notes": 1, "tags": 1, "due": 60, "repeat": 60, "images": 60, "status": 1, "rank": 60, "deleted": 1 }
       }
     },
     {
@@ -344,7 +344,7 @@
         "rank": 1000,
         "deleted": false,
         "updatedAt": 30,
-        "stamps": { "title": 1, "notes": 1, "tags": 1, "due": 1, "repeat": 30, "status": 1, "deleted": 1, "rank": 1 }
+        "stamps": { "title": 1, "notes": 1, "tags": 1, "due": 1, "repeat": 30, "images": 30, "status": 1, "deleted": 1, "rank": 1 }
       }
     },
     {
@@ -384,7 +384,7 @@
         "rank": 1000,
         "deleted": false,
         "updatedAt": 30,
-        "stamps": { "title": 1, "notes": 1, "tags": 1, "due": 1, "repeat": 30, "status": 1, "deleted": 1, "rank": 1 }
+        "stamps": { "title": 1, "notes": 1, "tags": 1, "due": 1, "repeat": 30, "images": 30, "status": 1, "deleted": 1, "rank": 1 }
       }
     },
     {
@@ -413,7 +413,7 @@
         "status": "todo",
         "deleted": false,
         "updatedAt": 20,
-        "stamps": { "title": 20, "notes": 20, "tags": 20, "due": 20, "repeat": 20, "status": 20, "deleted": 20, "rank": -1 }
+        "stamps": { "title": 20, "notes": 20, "tags": 20, "due": 20, "repeat": 20, "images": 20, "status": 20, "deleted": 20, "rank": -1 }
       }
     },
     {
@@ -448,7 +448,7 @@
         "rank": 4000,
         "deleted": false,
         "updatedAt": 90,
-        "stamps": { "title": 10, "notes": 10, "tags": 10, "due": 90, "repeat": 90, "status": 10, "deleted": 10, "rank": 0 }
+        "stamps": { "title": 10, "notes": 10, "tags": 10, "due": 90, "repeat": 90, "images": 90, "status": 10, "deleted": 10, "rank": 0 }
       }
     },
     {
@@ -483,7 +483,7 @@
         "rank": 4000,
         "deleted": false,
         "updatedAt": 300,
-        "stamps": { "title": 10, "notes": 10, "tags": 10, "due": 90, "repeat": 90, "status": 10, "deleted": 10, "rank": 300 }
+        "stamps": { "title": 10, "notes": 10, "tags": 10, "due": 90, "repeat": 90, "images": 90, "status": 10, "deleted": 10, "rank": 300 }
       }
     }
   ]

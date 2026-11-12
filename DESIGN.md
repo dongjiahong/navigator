@@ -793,11 +793,15 @@ Sync is part of the surface, not plumbing behind it, because the phone is only
 useful if it holds the same board. A handful of decisions shape what the user
 sees.
 
-**Every Mac serves, and only while it is open.** Its service is a thread in the
+**Every Mac serves, and only while it is running.** Its service is a thread in the
 app's own process. Quitting the app closes the port, so the phone cannot sync
-against a stale copy, and there is no daemon to install or manage. With two Macs
-both serve and both also look: they find each other on the network and exchange
-boards directly, and the phone syncs with every Mac it finds. A Mac that is
+against a stale copy, and there is no daemon to install or manage. The window is
+not the app: on macOS closing it hides the window and leaves the process serving,
+with a compass in the menu bar that brings the window back, shows the sync line
+and is where the user quits. Otherwise "leaving the Mac open" would mean leaving
+a window on the desk. With two Macs both serve and both also look: they find each
+other on the network and exchange boards directly, and the phone syncs with every
+Mac it finds. A Mac that is
 closed is a peer that is not answering this minute; the board on the others is
 whole without it.
 
@@ -863,6 +867,29 @@ backlog, and the rest of the board keeps moving. Repeating an exchange is safe
 because the merge is per field and a tombstone is a value, so the same row may
 cross as often as it likes.
 
+**Rows are pushed to the interface, not polled for.** The threads that exchange
+boards cannot call into JS — a callback belongs to the engine thread — so they
+hand each event to a channel, and one core task posts it on the engine thread:
+`rows` when a peer's answer arrives, or when a phone's request has just been
+written into this Mac's file, and `status` when what the sheet draws changes. The
+status is compared at the resolution it is shown — a sync time is `HH:MM` — so an
+exchange that only moved the seconds is not a repaint. The channel never drops a
+row: the exchange advances the peer's watermark before the interface has merged
+it, so a dropped row is a row no device would ever send again. The interface's
+own edits still travel on its timer, because only the interface knows what the
+user changed.
+
+**The phone syncs while the app is in front of the user.** Android freezes a
+backgrounded process and Doze cuts its network; nothing in this APK — no
+foreground service, no alarm, no wake lock — overrides that, because the
+exchange thread and the interface both live in the process. Locking the phone
+stops syncing, and that is stated rather than papered over. Nothing is lost: the
+file is flushed as the app leaves the foreground, and coming back nudges the
+exchange thread and pushes what arrived meanwhile. A build that still polls
+skips the poll while the app is not active, for the same reason: a board nobody
+is looking at has nothing to repaint. The Mac is the exception by design — its
+window can be hidden with the process still serving.
+
 **One board, one code.** A LAN at a coffee shop is everybody's LAN, so the board
 keeps six digits, shows them in a title band, and every device proves it read
 them: `GET /challenge` hands out a 16-byte nonce good for thirty seconds and one
@@ -917,6 +944,15 @@ while no peer answers, and three things bring it straight back to three — the 
 returning to the foreground, a typed address, and finding a peer. A radio that
 looks every three seconds for an afternoon is a radio that never sleeps. It holds
 on a Mac too, now that a Mac has something to look for.
+
+**The Older-Build Rule.** An OTA package carries TSX only and runs on the app that
+installed it, so the interface can be newer than the crate under it. A new export
+is therefore read off the module object it belongs to (`Sync.onEvent`) and gated
+by a number the crate answers for (`Sync.api()`), never imported by name: a named
+import of an export an older build does not have is a module that fails to load,
+not an `undefined` the package could check. `api()` 1 is everything through build
+9; 2 adds the pushed rows and status. An interface that cannot find the push
+falls back to the mailbox, which the crate fills exactly when no listener exists.
 
 **The Order-Is-Data Rule.** A column's order is a number on the card (`rank`), not
 an index in an array that the other device cannot see. A move is the midpoint

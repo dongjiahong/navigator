@@ -1,4 +1,4 @@
-import { Storage, platform, signal } from "nsh";
+import { Storage, lifecycle, platform, signal } from "nsh";
 import { Board, Sync } from "app/native";
 import { cards, tags, type Card, type Tag } from "./data";
 import { mergeBoards, mergeTags, sameBoard, sameById } from "./merge";
@@ -19,9 +19,10 @@ export { mergeBoards, mergeTags, sameBoard } from "./merge";
 /**
  * Sync keeps every device the user owns on the same board.
  *
- * A Mac *is* a server: its Rust crate listens on the LAN while the app is open,
- * so there is no daemon to install and quitting the app really does stop
- * syncing. With more than one Mac, every Mac is a server and every Mac also
+ * A Mac *is* a server: its Rust crate listens on the LAN while the app is
+ * running — closing the window hides it rather than quitting, which `desktop.ts`
+ * sets up — so there is no daemon to install and quitting the app really does
+ * stop syncing. With more than one Mac, every Mac is a server and every Mac also
  * watches: they find each other on the network and exchange boards directly.
  * The phone does not serve — its changes travel in the requests it sends — but
  * it syncs with every Mac it finds, so it is in step with all of them.
@@ -66,8 +67,29 @@ export { pairLine, pairState };
 const PORT = 8787;
 /** How often a Mac also reads its own file back for what a peer wrote into it. */
 const HOST_MS = 2500;
-/** How often the app checks the mailbox. Reading two cells, not a network. */
+/**
+ * How often this side hands the crate what changed here, when the peers' answers
+ * are pushed. Nothing is polled for: the crate posts them as they arrive, so this
+ * timer only carries the board's own edits the other way.
+ */
+const SEND_MS = 1200;
+/** How often the app checks the mailbox, on an installed app that cannot push. */
 const TICK_MS = 700;
+
+/**
+ * Whether the installed app pushes the peers' rows instead of being polled.
+ *
+ * An OTA package carries TSX only and runs on whatever build installed it, so
+ * this file can be newer than the crate under it. The exports that carry the
+ * push are therefore read off the module rather than imported by name — a named
+ * import of an export an older build does not have is a module that fails to
+ * load, not an `undefined` this can check — and `Sync.api()` says whether they
+ * mean anything.
+ */
+let pushes = typeof Sync.api === "function" && Sync.api() >= 2;
+
+/** The subscription to `Sync.onEvent`, once there is one. */
+let stopPushes: (() => void) | null = null;
 
 /**
  * The Mac runs a service; anything else only talks to one.
@@ -157,6 +179,54 @@ function adopt(reply: Reply, fromFile: boolean) {
   }
 }
 
+/**
+ * One event from the crate, as `Sync.onEvent` hands it over.
+ *
+ * `rows` is a peer's answer — or, on a Mac, the phone's request, already written
+ * into this device's file (`stored`). Apply it exactly as a polled answer would
+ * have been applied; nothing else about the merge changes.
+ *
+ * Exported for the test that pins the wire format to what the crate sends: the
+ * two are written on different sides of the interface and only meet here.
+ */
+export function applyEvent(text: string) {
+  let event: { type?: string; cards?: Card[]; tags?: Tag[]; at?: number; stored?: boolean; status?: Status };
+  try {
+    event = JSON.parse(text) as typeof event;
+  } catch {
+    return;
+  }
+  if (event.type === "rows") {
+    adopt(
+      {
+        cards: Array.isArray(event.cards) ? event.cards : [],
+        tags: Array.isArray(event.tags) ? event.tags : [],
+        at: typeof event.at === "number" ? event.at : 0,
+      },
+      event.stored === true,
+    );
+  } else if (event.type === "status" && event.status) {
+    applyStatus(event.status);
+  }
+}
+
+/** Listens for the crate's events, and draws the state it is in now. */
+function subscribe(): void {
+  if (stopPushes) return;
+  try {
+    stopPushes = Sync.onEvent(applyEvent);
+  } catch (error) {
+    // The export is there but would not take a listener: poll instead, which is
+    // what every build before this one does.
+    console.log(`[navigator] cannot subscribe to sync events: ${error}`);
+    pushes = false;
+    return;
+  }
+  // The events that follow are changes from here, so the state as it stands is
+  // read once rather than waited for.
+  readStatus();
+}
+
 let timer: ReturnType<typeof setInterval> | null = null;
 
 /** Start this Mac's service. Harmless to call twice. */
@@ -191,11 +261,18 @@ type Status = {
  * One tick, on either device: save what changed, show what the peers said, and
  * hand the crate what is new.
  *
+ * On an app that pushes, the peers' rows and the status arrive as events, so
+ * this only carries this device's own changes the other way — and is therefore
+ * safe to skip while the app is not in front of the user, which is the whole
+ * point of not polling: a board nobody is looking at has nothing to repaint.
+ *
  * A Mac reads its own file as well. That is not a merge of two boards: a peer's
  * request has already merged into the same rows, so there is nothing to
  * reconcile there, only rows written by a thread instead of by this one.
  */
 function tick() {
+  if (!pushes && lifecycle() !== "active") return;
+
   flush();
 
   if (isHost()) {
@@ -206,10 +283,12 @@ function tick() {
     }
   }
 
-  const answer = Sync.inbox();
-  if (answer) {
-    adopt(parseReply(answer), false);
-    syncedAt.set(Date.now());
+  if (!pushes) {
+    const answer = Sync.inbox();
+    if (answer) {
+      adopt(parseReply(answer), false);
+      syncedAt.set(Date.now());
+    }
   }
 
   // Tell the crate what changed here. It carries the rows to every peer, keeps
@@ -222,10 +301,10 @@ function tick() {
     Sync.offer(JSON.stringify({ cards: pending.cards, tags: pending.tags }));
   }
 
-  readStatus();
+  if (!pushes) readStatus();
 }
 
-/** Where sync stands, from the crate's one report: peers, code, last exchange. */
+/** Where sync stands, from the crate: peers, code, last exchange. */
 function readStatus() {
   let status: Status;
   try {
@@ -233,7 +312,11 @@ function readStatus() {
   } catch {
     return;
   }
+  applyStatus(status);
+}
 
+/** Draws a status, whether it was pushed or polled. */
+function applyStatus(status: Status) {
   const list = Array.isArray(status.peers) ? status.peers : [];
   // The same list, compared row by row: reading it into the signal every 700 ms
   // would repaint the sheet under the user's finger for nothing.
@@ -324,8 +407,12 @@ export async function start(): Promise<void> {
     console.log(`[navigator] the pairing code could not be adopted: ${error}`);
   }
   if (!code) pairState.set("need");
+  // Listening before the exchange thread starts: a row delivered in the first
+  // second is pushed to this subscription, and a row delivered before it is
+  // waiting in the crate's mailbox for it.
+  if (pushes) subscribe();
   Sync.watch();
-  timer = setInterval(tick, isHost() ? HOST_MS : TICK_MS);
+  timer = setInterval(tick, isHost() ? HOST_MS : pushes ? SEND_MS : TICK_MS);
   // Once at start, so a peer that wrote while the app was last open shows up as
   // the app opens rather than up to a couple of seconds later.
   tick();

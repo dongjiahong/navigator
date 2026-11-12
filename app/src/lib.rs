@@ -53,6 +53,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nsh_core::prelude::*;
 use serde_json::{Value, json};
+use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 mod auth;
 mod backup;
@@ -62,6 +63,17 @@ mod board;
 mod pairing_test;
 
 const MAX_BODY: usize = 4 * 1024 * 1024;
+
+/// The exports this crate answers to, as a number an interface delivered as an
+/// OTA package compares against.
+///
+/// A package carries TSX only and runs on the app that installed it, so an
+/// export added later is missing there — and a *named import* of a missing
+/// export is a module that fails to load, not an `undefined` the app can check.
+/// A package therefore reads what it needs off the module object it already
+/// has (`Sync.api`, `Sync.on_event`), and this number says what the installed
+/// app offers: 1 is everything through build 9, 2 adds `Sync.on_event`.
+pub const API: u32 = 2;
 
 /// The port this process listens on, once `start` has bound it.
 static BOUND: OnceLock<u16> = OnceLock::new();
@@ -146,6 +158,12 @@ fn put_newer(rows: &mut Vec<Value>, row: &Value) {
     }
 }
 
+/// The newest `updatedAt` in these rows, 0 when there are none.
+fn newest_stamp(cards: &[Value], tags: &[Value]) -> i64 {
+    let stamp = |row: &Value| row.get("updatedAt").and_then(Value::as_f64).unwrap_or(0.0);
+    cards.iter().chain(tags.iter()).map(stamp).fold(0.0, f64::max) as i64
+}
+
 /// One other device this device stays in step with.
 struct Peer {
     /// `host:port`, read off the discovery answer or typed by the user.
@@ -182,6 +200,129 @@ static INBOX: Mutex<Option<Body>> = Mutex::new(None);
 static SYNCED_AT: AtomicU64 = AtomicU64::new(0);
 /// Bumped when the app wants the exchange thread to look for peers again now.
 static NUDGE: AtomicU64 = AtomicU64::new(0);
+/// Every interface subscribed with `Sync.on_event`, and the id its `Stop`
+/// removes. A `Callback` is an engine-thread value, so the exchange threads
+/// cannot call JS themselves: they send here, and a core task on the engine
+/// thread posts each event.
+static LISTENERS: Mutex<Vec<(u64, UnboundedSender<String>)>> = Mutex::new(Vec::new());
+/// The id the next subscription gets.
+static NEXT_LISTENER: AtomicU64 = AtomicU64::new(1);
+/// The status the interface was last told, at the resolution it shows: a sync
+/// time is `HH:MM`, so a second here or there is not a change worth a post.
+static STATUS_SEEN: Mutex<Option<String>> = Mutex::new(None);
+
+/// One event from the sync threads to the interface, as `Sync.on_event` hands
+/// it over: a peer's rows (`{"type":"rows",…}`) or the status (`{"type":
+/// "status",…}`). Answers whether anybody took it: rows nobody took are kept in
+/// the mailbox for an app that polls instead.
+fn promote(event: String) -> bool {
+    let mut listeners = LISTENERS.lock().unwrap();
+    // A closed channel is an interface that went away; it is dropped here.
+    listeners.retain(|(_, tx)| tx.send(event.clone()).is_ok());
+    !listeners.is_empty()
+}
+
+/// A rows event. `stored` says the rows are already in this device's file (a
+/// Mac's request thread writes what a peer sends before it answers), which is
+/// what the interface needs to know to remember them as written.
+fn rows_event(cards: &[Value], tags: &[Value], at: i64, stored: bool) -> String {
+    json!({"type": "rows", "cards": cards, "tags": tags, "at": at, "stored": stored}).to_string()
+}
+
+/// Where sync stands, as the interface reads it (`Sync.status`'s body).
+fn status_value() -> Value {
+    let peers = PEERS.lock().unwrap();
+    let now = now_millis();
+    let any_ok = peers.iter().any(|peer| peer.ok);
+    let refused = peers.iter().any(|peer| peer.refused);
+    let retry = peers.iter().map(|peer| peer.locked_until).max().unwrap_or(0);
+    let locked = retry > now;
+    // Why an exchange is not happening, in one word the app can draw:
+    // `need` — this device has no code yet; `wrong` — a peer did not take
+    // the code; `locked` — a peer asked it to wait; `ok` — nothing in the
+    // way. A refusal is said only when no peer is in step: a code that is
+    // wrong for a second Mac must not hide a board that is syncing with the
+    // first, and the sheet names the peer that needs it.
+    let pair = if !auth::has_prover() {
+        "need"
+    } else if refused && !any_ok {
+        "wrong"
+    } else if locked && !any_ok {
+        "locked"
+    } else {
+        "ok"
+    };
+    let list: Vec<Value> = peers
+        .iter()
+        .map(|peer| {
+            let state = if peer.refused {
+                "wrong"
+            } else if peer.locked_until > now {
+                "locked"
+            } else {
+                "ok"
+            };
+            json!({
+                "addr": peer.addr,
+                "ok": peer.ok,
+                "at": peer.at,
+                "typed": peer.typed,
+                "pair": state,
+                // Seconds left of this peer's lockout, rounded up so a
+                // client never comes back a moment early.
+                "retry": if peer.locked_until > now {
+                    (peer.locked_until - now).div_ceil(1000)
+                } else {
+                    0
+                },
+            })
+        })
+        .collect();
+    json!({
+        "peer": peers.first().map(|peer| peer.addr.clone()).unwrap_or_default(),
+        "peers": list,
+        "unreachable": !peers.is_empty() && !any_ok,
+        "at": SYNCED_AT.load(Ordering::Relaxed),
+        "pair": pair,
+        "retry": if locked { (retry - now).div_ceil(1000) } else { 0 },
+    })
+}
+
+/// What the status shows, at the resolution it shows it: a sync time is the
+/// minute, so an exchange that only moved the seconds is not a change worth a
+/// post. Everything else — the peers, their state, the code, whether one
+/// answered — is compared as it is.
+fn status_fingerprint(value: &Value) -> String {
+    let minute = |value: Option<&Value>| value.and_then(Value::as_u64).unwrap_or(0) / 60_000;
+    let mut shown = value.clone();
+    if let Some(object) = shown.as_object_mut() {
+        let at = minute(object.get("at"));
+        object.insert("at".into(), json!(at));
+        if let Some(peers) = object.get_mut("peers").and_then(Value::as_array_mut) {
+            for peer in peers {
+                if let Some(peer) = peer.as_object_mut() {
+                    let at = minute(peer.get("at"));
+                    peer.insert("at".into(), json!(at));
+                }
+            }
+        }
+    }
+    shown.to_string()
+}
+
+/// Tells the interfaces when the status they show has changed.
+fn promote_status() {
+    let value = status_value();
+    let fingerprint = status_fingerprint(&value);
+    {
+        let mut seen = STATUS_SEEN.lock().unwrap();
+        if seen.as_deref() == Some(fingerprint.as_str()) {
+            return;
+        }
+        *seen = Some(fingerprint);
+    }
+    promote(json!({"type": "status", "status": value}).to_string());
+}
 
 fn parse_cards(text: &str) -> Result<Vec<Value>, String> {
     let value: Value = serde_json::from_str(text).map_err(|e| format!("bad JSON: {e}"))?;
@@ -365,6 +506,7 @@ fn offer_port(text: &str) -> Option<u16> {
 /// known peer has already told us.
 fn found_peers(found: Vec<String>) {
     let mut peers = PEERS.lock().unwrap();
+    let before = peers.len();
     for addr in found {
         if peers.iter().any(|peer| peer.addr == addr) {
             continue;
@@ -380,6 +522,11 @@ fn found_peers(found: Vec<String>) {
             backlog: Body::default(),
         });
     }
+    let found_one = peers.len() != before;
+    drop(peers);
+    if found_one {
+        promote_status();
+    }
 }
 
 /// Points this device at `addr` by hand, for a network that drops broadcasts.
@@ -391,6 +538,8 @@ fn add_typed(addr: String) {
     let mut peers = PEERS.lock().unwrap();
     if let Some(peer) = peers.iter_mut().find(|peer| peer.addr == addr) {
         peer.typed = true;
+        drop(peers);
+        promote_status();
         return;
     }
     // One typed address at a time: the app stores one, and a second would be a
@@ -406,6 +555,8 @@ fn add_typed(addr: String) {
         typed: true,
         backlog: Body::default(),
     });
+    drop(peers);
+    promote_status();
 }
 
 /// What one cycle sends a peer: its own backlog plus what the app changed since
@@ -442,50 +593,63 @@ fn delivered(addr: &str, answer: &str) {
     let at = value.get("at").and_then(Value::as_f64).unwrap_or(0.0) as i64;
     let body = Body::from_text(answer);
     {
-        let mut inbox = INBOX.lock().unwrap();
-        inbox.get_or_insert_with(Body::default).absorb(&body);
-    }
-    let mut peers = PEERS.lock().unwrap();
-    if let Some(peer) = peers.iter_mut().find(|peer| peer.addr == addr) {
-        peer.heard = peer.heard.max(at);
-        peer.ok = true;
-        peer.at = now_millis();
-        peer.refused = false;
-        peer.locked_until = 0;
-        peer.backlog = Body::default();
+        let mut peers = PEERS.lock().unwrap();
+        if let Some(peer) = peers.iter_mut().find(|peer| peer.addr == addr) {
+            peer.heard = peer.heard.max(at);
+            peer.ok = true;
+            peer.at = now_millis();
+            peer.refused = false;
+            peer.locked_until = 0;
+            peer.backlog = Body::default();
+        }
     }
     SYNCED_AT.store(now_millis(), Ordering::Relaxed);
+    // The interface is told now rather than on its next tick: this is the moment
+    // the rows arrived, and a visible board should change when they do.
+    if !body.is_empty() && !promote(rows_event(&body.cards, &body.tags, at, false)) {
+        // No interface is listening — an app that polls instead — so the rows
+        // wait in the mailbox. Rows a listener took are already on their way and
+        // need not be kept a second time.
+        INBOX.lock().unwrap().get_or_insert_with(Body::default).absorb(&body);
+    }
+    promote_status();
 }
 
 /// A peer would not take this device's code, or asked it to wait. The body goes
 /// back into the peer's own backlog: none of it was merged.
 fn refused_by(addr: &str, locked: bool, retry: u64, sent: Body) {
     let until = if locked { now_millis() + retry.max(1) * 1000 } else { 0 };
-    let mut peers = PEERS.lock().unwrap();
-    if let Some(peer) = peers.iter_mut().find(|peer| peer.addr == addr) {
-        peer.ok = false;
-        peer.backlog = sent;
-        if locked {
-            peer.locked_until = until;
-        } else {
-            peer.refused = true;
+    {
+        let mut peers = PEERS.lock().unwrap();
+        if let Some(peer) = peers.iter_mut().find(|peer| peer.addr == addr) {
+            peer.ok = false;
+            peer.backlog = sent;
+            if locked {
+                peer.locked_until = until;
+            } else {
+                peer.refused = true;
+            }
         }
     }
+    promote_status();
 }
 
 /// A peer did not answer. A discovered one is forgotten so the next probe finds
 /// it again (at whatever address it took); a typed one is kept, because that is
 /// the one address the user gave.
 fn lost(addr: &str, sent: Body) {
-    let mut peers = PEERS.lock().unwrap();
-    if let Some(index) = peers.iter().position(|peer| peer.addr == addr) {
-        if peers[index].typed {
-            peers[index].ok = false;
-            peers[index].backlog = sent;
-        } else {
-            peers.remove(index);
+    {
+        let mut peers = PEERS.lock().unwrap();
+        if let Some(index) = peers.iter().position(|peer| peer.addr == addr) {
+            if peers[index].typed {
+                peers[index].ok = false;
+                peers[index].backlog = sent;
+            } else {
+                peers.remove(index);
+            }
         }
     }
+    promote_status();
 }
 
 /// Answers probes with the board's port, for as long as the app is open.
@@ -866,6 +1030,14 @@ fn handle(mut stream: TcpStream) {
                 });
                 match merged {
                     Ok(answer) => {
+                        // The rows are in this Mac's file before the answer goes
+                        // out, so the interface is told `stored: true` — the
+                        // opposite of a reply from a peer, which still has to be
+                        // written here.
+                        if !incoming.is_empty() || !incoming_tags.is_empty() {
+                            let at = newest_stamp(&incoming, &incoming_tags);
+                            promote(rows_event(&incoming, &incoming_tags, at, true));
+                        }
                         let _ = respond(&mut stream, 200, &answer);
                     }
                     Err(e) => {
@@ -1119,62 +1291,54 @@ impl Sync {
     /// doing. The top-level `pair` is the one thing worth saying about the code
     /// across all of them, and `unreachable` says no peer answered at all.
     pub fn status() -> String {
-        let peers = PEERS.lock().unwrap();
-        let now = now_millis();
-        let any_ok = peers.iter().any(|peer| peer.ok);
-        let refused = peers.iter().any(|peer| peer.refused);
-        let retry = peers.iter().map(|peer| peer.locked_until).max().unwrap_or(0);
-        let locked = retry > now;
-        // Why an exchange is not happening, in one word the app can draw:
-        // `need` — this device has no code yet; `wrong` — a peer did not take
-        // the code; `locked` — a peer asked it to wait; `ok` — nothing in the
-        // way. A refusal is said only when no peer is in step: a code that is
-        // wrong for a second Mac must not hide a board that is syncing with the
-        // first, and the sheet names the peer that needs it.
-        let pair = if !auth::has_prover() {
-            "need"
-        } else if refused && !any_ok {
-            "wrong"
-        } else if locked && !any_ok {
-            "locked"
-        } else {
-            "ok"
-        };
-        let list: Vec<Value> = peers
-            .iter()
-            .map(|peer| {
-                let state = if peer.refused {
-                    "wrong"
-                } else if peer.locked_until > now {
-                    "locked"
-                } else {
-                    "ok"
-                };
-                json!({
-                    "addr": peer.addr,
-                    "ok": peer.ok,
-                    "at": peer.at,
-                    "typed": peer.typed,
-                    "pair": state,
-                    // Seconds left of this peer's lockout, rounded up so a
-                    // client never comes back a moment early.
-                    "retry": if peer.locked_until > now {
-                        (peer.locked_until - now).div_ceil(1000)
-                    } else {
-                        0
-                    },
-                })
-            })
-            .collect();
-        json!({
-            "peer": peers.first().map(|peer| peer.addr.clone()).unwrap_or_default(),
-            "peers": list,
-            "unreachable": !peers.is_empty() && !any_ok,
-            "at": SYNCED_AT.load(Ordering::Relaxed),
-            "pair": pair,
-            "retry": if locked { (retry - now).div_ceil(1000) } else { 0 },
+        status_value().to_string()
+    }
+
+    /// The exports this crate answers to, for an interface delivered as an OTA
+    /// package that runs on whichever build installed it. See `API`.
+    pub fn api() -> u32 {
+        API
+    }
+
+    /// Calls `listener` with every event as it happens, as JSON:
+    /// `{"type":"rows",cards,tags,at,stored}` when a peer's rows arrive, and
+    /// `{"type":"status",status}` when the state the sheet draws changes.
+    ///
+    /// The threads that exchange boards cannot call into JS (a `Callback` is an
+    /// engine-thread value), so they post to a channel and this task forwards it
+    /// here. The channel is unbounded because a dropped row would be a row the
+    /// interface never merges and the peer never sends again: the exchange
+    /// advances the peer's watermark before the interface sees it.
+    ///
+    /// Returns the function that stops the callbacks; it also runs when the
+    /// reactive owner that made the call goes.
+    pub fn on_event(cx: CallCx<'_>, #[args(event)] listener: Callback<String>) -> Stop {
+        let (tx, mut rx) = unbounded_channel::<String>();
+        let id = NEXT_LISTENER.fetch_add(1, Ordering::Relaxed);
+        // Listed before the mailbox is read: from here on a delivered row comes
+        // to this channel rather than being stashed for a poll that no longer
+        // happens.
+        LISTENERS.lock().unwrap().push((id, tx.clone()));
+        // Rows delivered while no interface was listening — before this launch's
+        // subscription, or between two of them — are in the mailbox, and this is
+        // the last moment they can be handed over: nothing polls for them once a
+        // listener exists.
+        if let Some(body) = INBOX.lock().unwrap().take() {
+            if !body.is_empty() {
+                let at = newest_stamp(&body.cards, &body.tags);
+                let _ = tx.send(rows_event(&body.cards, &body.tags, at, false));
+            }
+        }
+        cx.start(async move {
+            while let Some(event) = rx.recv().await {
+                listener.post(event);
+            }
+        });
+        Stop::new(move || {
+            if let Ok(mut listeners) = LISTENERS.lock() {
+                listeners.retain(|(i, _)| *i != id);
+            }
         })
-        .to_string()
     }
 
     /// Adds a device to sync with by hand, for a network that drops broadcasts.
@@ -1236,6 +1400,7 @@ impl Sync {
             peer.refused = false;
             peer.locked_until = 0;
         }
+        promote_status();
         NUDGE.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }

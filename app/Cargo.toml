@@ -13,6 +13,10 @@ nsh-core = { git = "https://github.com/longbridge/nsh", rev = "36b91689c1e7c3837
 nsh-base = { git = "https://github.com/longbridge/nsh", rev = "36b91689c1e7c38379179a56381de7ddab16c6a5" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The one channel from the sync threads to the interface: the exchange thread
+# cannot call a JS callback (a `Callback` is an engine-thread `Rc`), so it hands
+# events to a core task that does.
+tokio = { version = "1", features = ["sync"] }
 # The interface list, for the broadcast addresses the phone probes.
 libc = "0.2"
 # The board's file. Bundled: SQLite is compiled in rather than found on the

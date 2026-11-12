@@ -8,6 +8,7 @@ import { CommandPalette, closePalette, openPalette, paletteOpen } from "./palett
 import { BackupTool, exportBoard, importFromClipboard, openRestore } from "./BackupTool";
 import { startBackups } from "./backupStore";
 import { adoptWindowChrome, headerHeight, titleSpacer } from "./chrome";
+import { keepServing } from "./desktop";
 import {
   addCard,
   cards,
@@ -347,6 +348,10 @@ export function App() {
   // The window's title bar is the app's own header, and it can be drawn at once:
   // nothing about it waits for the board.
   adoptWindowChrome();
+  // On the Mac, closing the window hides it instead of ending the app: the
+  // board is served by this process, so the window is not what is doing the
+  // syncing.
+  keepServing();
   // The board itself is read from its file first, and everything that writes to
   // it starts after it is open — the LAN service merges into the same file, and
   // a reminder scheduled for a sample card would be a notification about work

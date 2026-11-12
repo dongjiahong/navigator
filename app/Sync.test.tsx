@@ -1,7 +1,8 @@
 import { expect, test } from "nsh/test";
 import cases from "./merge-cases.json";
 import { mergeBoards, mergeCard, sameBoard } from "./merge";
-import type { Card } from "./data";
+import { cards, type Card } from "./data";
+import { applyEvent, peers, phase, statusLine } from "./sync";
 
 /**
  * The merge, as the two devices run it.
@@ -160,4 +161,57 @@ test("merging moves the row stamp to the newest field it decided on", () => {
   // The same card before the other device's write compares as different, which
   // is how a field-level change reaches the screen at all.
   expect(sameBoard([merged], [a])).toBe(false);
+});
+
+/**
+ * The crate pushes what a peer answered instead of the app polling a mailbox.
+ * The event text is the agreement between the two sides — written in Rust and
+ * read here — so these pin the format, not the merge (which has its own tests).
+ */
+test("a pushed rows event merges into the board on screen", () => {
+  const before = cards();
+  try {
+    cards.set([card("a", { title: "本地", updatedAt: 10 })]);
+    applyEvent(
+      JSON.stringify({
+        type: "rows",
+        cards: [card("a", { title: "Mac 上改的", updatedAt: 20 })],
+        tags: [],
+        at: 20,
+        stored: false,
+      }),
+    );
+    expect(cards().map((c) => c.title)).toEqual(["Mac 上改的"]);
+    // A body that does not parse is not a change: the next exchange carries the
+    // same rows, and a bad event must not empty the board.
+    applyEvent("not json");
+    expect(cards().map((c) => c.title)).toEqual(["Mac 上改的"]);
+  } finally {
+    cards.set(before);
+  }
+});
+
+test("a pushed status event is what the header draws", () => {
+  const wasPeers = peers();
+  const wasPhase = phase();
+  try {
+    applyEvent(
+      JSON.stringify({
+        type: "status",
+        status: {
+          peers: [{ addr: "10.0.0.5:8787", ok: true, at: 1, typed: false, pair: "ok" }],
+          unreachable: false,
+          at: 1,
+          pair: "ok",
+        },
+      }),
+    );
+    expect(peers().length).toBe(1);
+    expect(phase()).toBe("synced");
+    // Only the part that does not depend on the test host's time zone.
+    expect(statusLine().startsWith("已同步")).toBe(true);
+  } finally {
+    peers.set(wasPeers);
+    phase.set(wasPhase);
+  }
 });

@@ -37,7 +37,7 @@ nsh 0.4.0 没有任何通知 API。App 现在把 nsh 固定到 main 的 `36b9168
 
 **Android：App 打开时能发系统通知。** nsh main 增加了 `Notifications`，`nsh package` 在 App 可以通知时会往 manifest 写 `POST_NOTIFICATIONS`（不声明 `capabilities` 的独立 App 默认拥有这项能力）。`reminders.ts` 在 Android 上读取/请求通知权限；App 每 20 秒检查一次「五分钟内刚到期」的卡，有权限就发一条 `id` 为 `navigator.card.<卡片 id>` 的系统通知，标题是「到时间了：…」，点通知会打开手机的卡片详情页。已逾期的卡每小时再发一次（标题「已逾期：…」，同一个 id 覆盖上一条）；没有权限时退回列表上方的横幅，关掉后这张卡安静一小时。手机「连到 Mac」Sheet 里新增了「通知」一栏：一行显示当前权限状态，旁边「测试」按钮会请求权限并发一条「通知测试」，不用等到某个截止时间。
 
-**通知开关是灰色时先确认安装包。** 本仓库打出的 `0.1.8 (build 9)` APK 的 manifest 里同时有 `INTERNET` 和 `POST_NOTIFICATIONS`；旧包没有后者，Android 13+ 的通知页就会把开关画成灰的、点不动。用 `app/.nsh/out/Navigator.apk` 覆盖安装（`adb install -r`，保留数据），再打开 App 看「连到 Mac → 通知」。如果版本已经是 0.1.8 但开关仍灰，检查这台手机上领航是不是被停用、被工作资料/家长控制限制，或装在另一个用户下；用下面的命令能看到实际装的是哪个包、有没有声明权限：
+**通知开关是灰色时先确认安装包。** 本仓库打出的 `0.1.9 (build 10)` APK 的 manifest 里同时有 `INTERNET` 和 `POST_NOTIFICATIONS`；旧包没有后者，Android 13+ 的通知页就会把开关画成灰的、点不动。用 `app/.nsh/out/Navigator.apk` 覆盖安装（`adb install -r`，保留数据），再打开 App 看「连到 Mac → 通知」。如果版本已经是 0.1.9 但开关仍灰，检查这台手机上领航是不是被停用、被工作资料/家长控制限制，或装在另一个用户下；用下面的命令能看到实际装的是哪个包、有没有声明权限：
 
 ```sh
 adb shell dumpsys package com.lele.navigator | grep -E 'versionName|versionCode|POST_NOTIFICATIONS'
@@ -58,11 +58,11 @@ adb shell pm grant com.lele.navigator android.permission.POST_NOTIFICATIONS
 
 ## OTA 更新
 
-App 的 TSX 可以作为签名包（`.nshpkg`）从 GitHub Release 下发，不用每次重新装 APK。**装一次 `0.1.8 (build 9)` 的 APK 之后**，只改界面、逻辑、图片和字体都可以走 OTA；改 Rust crate、nsh runtime、权限或 manifest 仍然要出新 APK。
+App 的 TSX 可以作为签名包（`.nshpkg`）从 GitHub Release 下发，不用每次重新装 APK。**装一次 `0.1.9 (build 10)` 的 APK 之后**，只改界面、逻辑、图片和字体都可以走 OTA；改 Rust crate、nsh runtime、权限或 manifest 仍然要出新 APK。
 
 - `app/nsh.json` 的 `updater` 指向 `dongjiahong/navigator` 的最新 Release，并写了两个公钥：`publicKey` 验 `latest.json`，`packages.roots` 验 `.nshpkg`。
 - 签名私钥在仓库外：`~/.navigator-ota/`（`root.secret` 离线保存；`release.secret`、`release.cert`、`update.secret` 用于发版）。**不要把任何 `.secret` 提交进仓库。**
-- 没有 CI：发版全在本机。跑 `scripts/ota-release.sh --build 9 --notes CHANGES.md`，把 `dist/*.nshpkg`、`dist/latest.json`、`dist/latest.json.sig` 三个文件连同 APK 一起传到 GitHub Release（顺序：包先，manifest 和签名后）。
+- 没有 CI：发版全在本机。跑 `scripts/ota-release.sh --build 10 --notes CHANGES.md`，把 `dist/*.nshpkg`、`dist/latest.json`、`dist/latest.json.sig` 三个文件连同 APK 一起传到 GitHub Release（顺序：包先，manifest 和签名后）。
 - 每次发版都要把 `app/nsh.json` 的 `build` 加一；`version` 也一起改。App 只在包比当前 build 新时才装。
 - App 启动后 5 秒检查一次；手机在「连到 Mac」Sheet 里还有「检查更新」。Android/iOS 下载后**下次冷启动**运行，桌面可以按「重启」立刻运行。包第一次运行有 10 秒试用期，起不来会自动回退。
 
@@ -79,6 +79,7 @@ App 的 TSX 可以作为签名包（`.nshpkg`）从 GitHub Release 下发，不�
 Mac 端的 Rust crate（`app/src/lib.rs`）在 App 启动时 `TcpListener::bind(("0.0.0.0", 8787))`，用一个后台线程接收连接，每个连接一个线程。
 
 - 服务**只**在 App 运行时存在。退出 App，端口关闭，别的设备的同步请求失败，而不是对着一个陈旧副本说话。
+- **关窗口不等于退出。** macOS 上按窗口的关闭按钮只是把窗口藏起来，进程还在，端口还开着；菜单栏里有一个指南针图标，点它把窗口叫回来，菜单里显示同步状态，也提供「退出 Navigator」（⌘Q 同样有效）。想停同步就退出，不想停就把窗口收进菜单栏。手机上关掉 App 仍然会停同步，见「已知边界」。
 - 没有 launchd daemon，没有用户要手动跑的脚本。
 - `Sync.start` 是幂等的：已经 bind 过就直接返回那个端口，不会在同一个进程里泄漏第二个监听器。
 - **每台 Mac 既是服务端也是客户端。** 它一边监听，一边探测网络上的其它 Mac 并互相同步；手机只当客户端（它的改动跟着请求走，应答带回 Mac 的），但对**发现的每一台 Mac** 都同步。所以两台 Mac 都开着时三台设备收敛，只开一台时手机和它收敛，另一台 Mac 下次开机补上。
@@ -125,7 +126,7 @@ IP 会因 DHCP 租约变化，所以**不把 IP 存起来当配置**。[LocalSen
 
 两边都持有整份看板，合并是逐卡、逐字段的：
 
-- **每个字段一个戳。** `stamps` 里 title / notes / tags / due / repeat / status / deleted / rank 这 8 个字段各有一个时间戳（TS 的 `MERGE_FIELDS` 与 Rust 的 `board::MERGE_FIELDS` 是同一张表），合并时每个字段取戳新的那一份：Mac 上打的标题和同一分钟手机按的「完成」都活下来。`updatedAt` 于是是各字段戳里的最大值，而不只是「最后动手的时间」——按行问「变了吗」「给我 since 之后的行」仍然成立。没有 `stamps` 的旧数据，每个字段退回这张卡自己的 `updatedAt`。
+- **每个字段一个戳。** `stamps` 里 title / notes / tags / due / repeat / images / status / deleted / rank 这 9 个字段各有一个时间戳（TS 的 `MERGE_FIELDS` 与 Rust 的 `board::MERGE_FIELDS` 是同一张表），合并时每个字段取戳新的那一份：Mac 上打的标题和同一分钟手机按的「完成」都活下来。`updatedAt` 于是是各字段戳里的最大值，而不只是「最后动手的时间」——按行问「变了吗」「给我 since 之后的行」仍然成立。没有 `stamps` 的旧数据，每个字段退回这张卡自己的 `updatedAt`。
 - **平局也有确定答案。** 两个钟撞在同一毫秒时，取 JSON 文本较大的值（UTF-16 码元序）。两端跑同一条规则，所以谁先问都一样。
 - **删除是一个字段。** 删卡不是丢行，而是 `deleted: true` 加一个新戳；撤销删除就是再写一次 `deleted: false`，戳更新，所以凭空赢。删标签同理，另外每张带过这个标签的卡都会被盖一次戳，把「取下标签」也同步过去。直接丢 id 的话，另一台设备下一次合并会把它推回来。
 - **顺序也是数据。** 列内位置是卡上的 `rank`：插入取前后两名的中点，间隔小于 `1e-6` 就整列按 1000 步长重编号；新卡落列末。SQLite 里的 `ord` 列只是旧数据的兜底缓存，装载一律按 `rank` 排——不然手机和 Mac 会各显示各的顺序。旧看板首次启动迁移一次：按当前显示顺序写 1000、2000…，字段戳用最低值 0，一次批量写入，且就地改对象（换副本会让每个 cell 重建，正拖着的卡会掉手）。
@@ -151,7 +152,13 @@ Android 从 targetSdk 28 起默认禁止**明文 HTTP 到非本机地址**，而
 | 每台设备 | `exchange_loop` | 探测所有对端、`GET /challenge`、带证明 POST、把结果写进 inbox；每个对端各有水位和补发队列 |
 | 手机 | 无监听 | 只跑 `exchange_loop`，和发现的每一台 Mac 各交换一次 |
 
-JS 侧每 700ms（Mac 每 2.5 秒）做一次极轻的轮询（读两个 `Mutex` 单元，不是网络）：有新内容才 `Sync.offer(...)`，有回包才 `Sync.inbox()`。所以对端睡着时界面完全不会卡。Mac 每 2.5 秒把自己的改动先写进文件、再把对端写进去的行读回来（它读的是同一个文件，不是另一份看板）。`exchange_loop` 自己每 3 秒问一次「你那边有什么新的」（没有改动就发空 body），否则在一台设备上加的卡要等到下次被编辑才会到另一台。
+**界面不再轮询邮箱。** `exchange_loop` 拿到对端应答的那一刻，Rust 侧把事件推给界面：`Sync.onEvent(listener)` 返回一个取消函数，回调收到 `{"type":"rows",…}`（对端的行，或手机刚被写进这台 Mac 文件的行）或 `{"type":"status",…}`（面板要画的状态）。交换线程不能直接调 JS——`Callback` 是引擎线程上的 `Rc`——所以它把事件发给一个无界 channel，由 `cx.start` 起的 core task 在引擎线程上转发。channel 不丢事件：交换在 `delivered` 里先把对端水位推到这批行之后，界面才合并，丢一行就是一行再也不会被任何设备重发的数据。状态按界面能显示的分辨率比较：同步时间只显示到分钟，同一分钟内只是秒变了不会重绘。
+
+界面自己每 1.2 秒（Mac 每 2.5 秒）仍做一件很轻的事：把本机改动 `flush()` 进文件并 `Sync.offer(...)` 给交换线程；Mac 还用这个节拍把自己文件里对端写进去的行读回来。`exchange_loop` 自己每 3 秒问一次「你那边有什么新的」（没有改动就发空 body），否则在一台设备上加的卡要等到下次被编辑才会到另一台。对端睡着时这里完全不会卡。
+
+`0.1.8 (build 9)` 及更早的安装包没有 `Sync.onEvent`，界面会自动退回旧的轮询：每 700ms 读 `Sync.inbox()` + `Sync.status()`。判断方式是 `Sync.api()`（老包没有这个函数，按 1 算；2 才有推送）以及直接在模块对象上取 `Sync.onEvent`——OTA 包只带 TSX，运行时可能比它新，按名字 import 一个老包没有的导出会让整个模块加载失败。
+
+老包轮询时只在 App 处于 `active` 时读邮箱：没有人在看的看板不必重绘。手机锁屏后 Android 会冻结进程、Doze 会断网，后台同步本来就会停；回到前台时 `nudgeSync()` 加推送会立刻把这段时间的改动补齐，数据不丢，因为离开前台时文件已经 flush 过。
 
 `sameBoard()` 按 `id + updatedAt + deleted` 逐卡比较，**绝不比较 JSON 文本**——服务端会用排序后的键重新序列化，字符串比较会每个 tick 都报「变了」，`cards.set` 就会在手指底下重绘看板。
 
@@ -170,6 +177,7 @@ Mac 端服务（手机也走这几个）：
 
 ### 已知边界
 
+- **手机只在 App 在前台时同步。** 锁屏或切走后，Android 会冻结进程、Doze 会断网，后台同步就停了；这个 APK 里没有前台服务、没有 AlarmManager、也没有 wake lock，所以它不会自己回来。回到 App 时一次交换就把这段时间的改动补齐，数据不丢：离开前台时文件已经写过。Mac 不一样——窗口关掉只是藏起来，进程还在服务。
 - 同一局域网才能连，不穿透 NAT，不走公网。
 - **要配对码，但仍是明文 HTTP。** 码本身不上线，可线上的卡片内容是明文的：同一个 Wi-Fi 里被动抓包的人读得到你在写什么。要的是「同网段的人不能随手改我的板」，不是「内容保密」。
 - **锁是把双刃剑。** 5 次失败锁 60 秒挡住了穷举，也意味着同一网段有人故意发 5 次错码就能把你的手机挡在门外一分钟。这是「没有账号、不做用户系统」的代价。
