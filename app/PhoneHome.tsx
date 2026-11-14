@@ -516,8 +516,8 @@ function CaptureSheet() {
           placeholder="要做什么？"
           onChange={({ value }) => draftTitle.set(value)}
           onPaste={(e) => {
-            if (!e.files.length) return;
-            void withPastedImages(draftImages(), e.files).then((next) => {
+            if (!e.files.length && e.text) return;
+            void withPastedImages(draftImages(), e.files, e.text).then((next) => {
               if (next) draftImages.set(next);
             });
           }}
@@ -713,8 +713,8 @@ function DetailBody(props: { id: string }) {
           placeholder="要做什么？"
           onChange={({ value }) => patchCard(id, { title: value })}
           onPaste={(e) => {
-            if (!e.files.length) return;
-            void withPastedImages(c().images ?? [], e.files).then((next) => {
+            if (!e.files.length && e.text) return;
+            void withPastedImages(c().images ?? [], e.files, e.text).then((next) => {
               if (next) patchCard(id, { images: next });
             });
           }}
@@ -740,8 +740,8 @@ function DetailBody(props: { id: string }) {
             placeholder="补充细节、链接、下一步…"
             onChange={({ value }) => patchCard(id, { notes: value })}
             onPaste={(e) => {
-              if (!e.files.length) return;
-              void withPastedImages(c().images ?? [], e.files).then((next) => {
+              if (!e.files.length && e.text) return;
+              void withPastedImages(c().images ?? [], e.files, e.text).then((next) => {
                 if (next) patchCard(id, { images: next });
               });
             }}

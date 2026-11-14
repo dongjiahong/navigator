@@ -149,7 +149,11 @@ export const MAX_IMAGES = 3;
 /** One picture, coated as the `data:` URL a card carries. */
 async function fileToDataUrl(file: File): Promise<string | null> {
   if (file.type && !file.type.startsWith("image/")) return null;
-  const bytes = await file.bytes();
+  return dataUrlOf(await file.bytes(), file.type || "image/jpeg");
+}
+
+/** Bytes as a `data:` URL. */
+function dataUrlOf(bytes: Uint8Array, type: string): string {
   let binary = "";
   // A chunk at a time: `String.fromCharCode(...all)` over a photo's bytes
   // overflows the argument list of a large image.
@@ -157,7 +161,16 @@ async function fileToDataUrl(file: File): Promise<string | null> {
   for (let i = 0; i < bytes.length; i += CHUNK) {
     binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
   }
-  return `data:${file.type || "image/jpeg"};base64,${btoa(binary)}`;
+  return `data:${type || "image/png"};base64,${btoa(binary)}`;
+}
+
+/** What a picture's first bytes say it is, for a clipboard image with no type. */
+function imageTypeOf(bytes: Uint8Array): string {
+  if (bytes[0] === 0x89 && bytes[1] === 0x50) return "image/png";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) return "image/jpeg";
+  if (bytes[0] === 0x47 && bytes[1] === 0x49) return "image/gif";
+  if (bytes[0] === 0x52 && bytes[1] === 0x49) return "image/webp";
+  return "image/png";
 }
 
 /**
@@ -182,6 +195,33 @@ export async function imagesFromFiles(files: readonly File[]): Promise<string[]>
 }
 
 /**
+ * The picture the system clipboard holds, as the `data:` URL a card carries.
+ *
+ * This is the second way a paste reaches a card. A field reports what was
+ * pasted through `onPaste`, but the board has no field: with a card open, Cmd+V
+ * is the user asking this card to take the screenshot they just took, and the
+ * only thing that can answer is the clipboard itself. The URL is usually the
+ * data URL already; when the platform hands over a temporary file instead, its
+ * bytes are read through `fetch` and the type is sniffed from them.
+ */
+export async function clipboardImage(): Promise<string | null> {
+  try {
+    if (!(await Clipboard.hasImage())) return null;
+    const image = await Clipboard.readImage();
+    if (!image) return null;
+    if (image.url.startsWith("data:image/")) return image.url;
+    const response = await fetch(image.url);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const header = response.headers.get("content-type") ?? "";
+    return dataUrlOf(bytes, header.startsWith("image/") ? header : imageTypeOf(bytes));
+  } catch {
+    // A clipboard that cannot be read, or a host with no clipboard at all, is
+    // no paste: the card stays exactly as it was.
+    return null;
+  }
+}
+
+/**
  * The card's pictures after a paste, or `null` when the paste held none.
  *
  * A press on a card's note is where a screenshot is pasted, and the field is
@@ -194,11 +234,21 @@ export async function imagesFromFiles(files: readonly File[]): Promise<string[]>
 export async function withPastedImages(
   current: readonly string[],
   files: readonly File[],
+  text = "",
 ): Promise<string[] | null> {
   const room = MAX_IMAGES - current.length;
-  if (room <= 0 || files.length === 0) return null;
-  const added = await imagesFromFiles(files.slice(0, room));
-  return added.length ? [...current, ...added] : null;
+  if (room <= 0) return null;
+  let added: string[] = [];
+  if (files.length) {
+    added = await imagesFromFiles(files.slice(0, room));
+  } else if (!text) {
+    // Some hosts hand an image paste to the field without its files; the field
+    // still hears the paste, so the clipboard is the one place left to look.
+    const src = await clipboardImage();
+    if (src) added = [src];
+  }
+  if (!added.length) return null;
+  return [...current, ...added].slice(0, MAX_IMAGES);
 }
 
 /**

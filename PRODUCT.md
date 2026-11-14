@@ -48,9 +48,10 @@ on the phone.
   cycle goes with the deadline — a card with no date cannot repeat, and clearing the
   date clears the cycle in the same write — and a month or a year that lands on a
   shorter month clamps to that month's end.
-- Pictures are picked from the system's picker or pasted into a title or note. They
-  live on the card as `data:` URLs, so they sync, export and back up with it; the
-  board shows only a glyph and a count, and the panel or sheet shows the tiles.
+- Pictures are picked from the system's picker, pasted into a title or note, or
+  attached with Cmd+V while the card is open. They live on the card as `data:`
+  URLs, so they sync, export and back up with it; the board shows only a glyph
+  and a count, and the panel or sheet shows the tiles.
 - A column is ordered by deadline: the nearest due time is at the top and an
   overdue card above everything still ahead. Cards with no deadline keep the order
   the user dragged them into, after the dated ones.

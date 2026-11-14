@@ -86,10 +86,10 @@ export function Inspector(props: {
   // A screenshot pasted into the title or the note becomes the card's picture.
   // The text of the paste still goes in as the field's own: only the files are
   // taken out here, and a paste with no picture is left alone.
-  const pasteImages = (files: readonly File[]) => {
-    if (!files.length) return;
+  const pasteImages = (files: readonly File[], text: string) => {
+    if (!files.length && text) return;
     const id = card().id;
-    void withPastedImages(card().images ?? [], files).then((next) => {
+    void withPastedImages(card().images ?? [], files, text).then((next) => {
       if (next) patchCard(id, { images: next });
     });
   };
@@ -169,7 +169,7 @@ export function Inspector(props: {
           value={card().title}
           placeholder="要做什么？"
           onChange={({ value }) => patchCard(card().id, { title: value })}
-          onPaste={(e) => pasteImages(e.files)}
+          onPaste={(e) => pasteImages(e.files, e.text)}
           style={{
             ...TYPE.inspectorTitle,
             color: theme().text,
@@ -278,7 +278,7 @@ export function Inspector(props: {
               value={card().notes}
               placeholder="补充细节、链接、下一步…"
               onChange={({ value }) => patchCard(card().id, { notes: value })}
-              onPaste={(e) => pasteImages(e.files)}
+              onPaste={(e) => pasteImages(e.files, e.text)}
               // The press on the note reveals the field (`editNote`); leaving
               // the field puts the reading back. The field does not reveal
               // itself on focus: it is mounted under the reading all along, and

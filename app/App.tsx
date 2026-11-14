@@ -36,12 +36,14 @@ import {
   DueCalendar,
   Icon,
   ImageViewer,
+  MAX_IMAGES,
   TagManager,
   TimePicker,
   UndoToast,
   UpdateToast,
   alpha,
   blurSearch,
+  clipboardImage,
   focusSearch,
   managingTags,
   pickingDue,
@@ -312,6 +314,31 @@ export function App() {
   keymap.bind("mod+f", () => {
     if (boardKeys()) focusSearch();
   });
+
+  // Cmd+V on the board: the open card, or the card the keys point at, takes the
+  // picture on the clipboard. With nothing focused there is no field to hand a
+  // paste to, so the clipboard is read directly; with a field focused the paste
+  // goes on to it as usual (`passThrough`), because a text paste must type and
+  // an image paste is what this handler takes. An image the field already
+  // reported through `onPaste` is the same picture, so it is not added twice.
+  keymap.bind(
+    "mod+v",
+    () => {
+      if (windowSize().width < WIDE) return;
+      if (pickingDue() !== null || managingTags() || paletteOpen()) return;
+      const id = selectedId() ?? focusId();
+      if (!id) return;
+      const card = cards().find((c) => c.id === id && !c.deleted);
+      if (!card || (card.images?.length ?? 0) >= MAX_IMAGES) return;
+      void clipboardImage().then((src) => {
+        if (!src) return;
+        const current = cards().find((c) => c.id === id && !c.deleted);
+        if (!current || (current.images ?? []).includes(src)) return;
+        patchCard(id, { images: [...(current.images ?? []), src].slice(0, MAX_IMAGES) });
+      });
+    },
+    { when: "always", passThrough: true },
+  );
 
   // The arrow keys walk the board, Enter reads the card and Space finishes it.
   // All of them are `notEditing`: in a title, a note or the search field those

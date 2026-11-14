@@ -17,7 +17,7 @@
 - **整张卡就是把手。** Mac 上没有单独的拖拽把手：按住卡移动 5pt 就把它拎起来（跨列、跨位置），按住不动就是点开。拖到列顶或列底 48pt 以内会自动滚动，越靠边越快。键盘做同样的事：方向键走卡，回车打开，空格完成/恢复，`Cmd+]` / `Cmd+[` 换列，`Cmd+K` 命令面板，`Cmd+F` 跳到搜索框，`Cmd+N` 新建。
 - **每列按截止时间排，不是按 rank 排。** 最近到期的一张在最上面，已逾期的排在所有还没到期的前面；没有截止的卡保持用户拖出来的顺序，排在所有有日期的卡之后。拖动仍然会写 `rank`（它决定无日期那部分的顺序），但有截止的卡最终显示在它自己的时间位置上。
 - **筛选是本机的视图，不是看板的数据。** 标签可以多选（命中任一即可）、日期条件三选一（今天 / 已逾期 / 无日期），再叠一个搜索框（标题、备注和标签名都能搜）。三者一起收窄，数量始终是整个看板的数。筛选状态只活在各自设备的进程里，不跟着同步走。
-- **卡片可以带图。** 最多三张，存成卡上的 `data:` URL，所以图片跟着标题走同一条同步、导出和备份，不会变成另一台设备没有的文件。系统相册/文件选择器会先把照片缩到 1280px（质量 0.72）；截图直接粘进标题或备注也会变成附件（平台给多大就存多大）。Mac 的检查器、手机的详情页和采集页是同一排缩略图：点开看整张，角上叉掉，点「贴图」开选择器。看板上只画一个图标和数量，不铺缩略图。
+- **卡片可以带图。** 最多三张，存成卡上的 `data:` URL，所以图片跟着标题走同一条同步、导出和备份，不会变成另一台设备没有的文件。系统相册/文件选择器会先把照片缩到 1280px（质量 0.72）；截图直接粘进标题或备注也会变成附件（平台给多大就存多大）。Mac 上打开卡片后直接按 `Cmd+V` 也能把剪贴板里的截图贴上去，输入框里按则走同样的路径。Mac 的检查器、手机的详情页和采集页是同一排缩略图：点开看整张，角上叉掉，点「贴图」开选择器。看板上只画一个图标和数量，不铺缩略图。
 - **截止会提醒。** Mac 上是一条真正的系统通知（Rust 侧直接走 `UNUserNotificationCenter`，带系统通知音，App 退出后照样送达）；过期后同一条卡每小时再响一次，直到完成或归档。手机在 App 打开时也能发真正的系统通知（nsh main 的 `Notifications`，APK 现在带 `POST_NOTIFICATIONS`），点通知会打开那张卡；没有权限或平台发不了时，退回列表上方的横幅。App 关闭后手机仍然不会到点唤醒。
 
 ---
@@ -37,7 +37,7 @@ nsh 0.4.0 没有任何通知 API。App 现在把 nsh 固定到 main 的 `36b9168
 
 **Android：App 打开时能发系统通知。** nsh main 增加了 `Notifications`，`nsh package` 在 App 可以通知时会往 manifest 写 `POST_NOTIFICATIONS`（不声明 `capabilities` 的独立 App 默认拥有这项能力）。`reminders.ts` 在 Android 上读取/请求通知权限；App 每 20 秒检查一次「五分钟内刚到期」的卡，有权限就发一条 `id` 为 `navigator.card.<卡片 id>` 的系统通知，标题是「到时间了：…」，点通知会打开手机的卡片详情页。已逾期的卡每小时再发一次（标题「已逾期：…」，同一个 id 覆盖上一条）；没有权限时退回列表上方的横幅，关掉后这张卡安静一小时。手机「连到 Mac」Sheet 里新增了「通知」一栏：一行显示当前权限状态，旁边「测试」按钮会请求权限并发一条「通知测试」，不用等到某个截止时间。
 
-**通知开关是灰色时先确认安装包。** 本仓库打出的 `0.1.9 (build 10)` APK 的 manifest 里同时有 `INTERNET` 和 `POST_NOTIFICATIONS`；旧包没有后者，Android 13+ 的通知页就会把开关画成灰的、点不动。用 `app/.nsh/out/Navigator.apk` 覆盖安装（`adb install -r`，保留数据），再打开 App 看「连到 Mac → 通知」。如果版本已经是 0.1.9 但开关仍灰，检查这台手机上领航是不是被停用、被工作资料/家长控制限制，或装在另一个用户下；用下面的命令能看到实际装的是哪个包、有没有声明权限：
+**通知开关是灰色时先确认安装包。** 本仓库打出的 `0.1.10 (build 11)` APK 的 manifest 里同时有 `INTERNET` 和 `POST_NOTIFICATIONS`；旧包没有后者，Android 13+ 的通知页就会把开关画成灰的、点不动。用 `app/.nsh/out/Navigator.apk` 覆盖安装（`adb install -r`，保留数据），再打开 App 看「连到 Mac → 通知」。如果版本已经是 0.1.10 但开关仍灰，检查这台手机上领航是不是被停用、被工作资料/家长控制限制，或装在另一个用户下；用下面的命令能看到实际装的是哪个包、有没有声明权限：
 
 ```sh
 adb shell dumpsys package com.lele.navigator | grep -E 'versionName|versionCode|POST_NOTIFICATIONS'
@@ -58,11 +58,11 @@ adb shell pm grant com.lele.navigator android.permission.POST_NOTIFICATIONS
 
 ## OTA 更新
 
-App 的 TSX 可以作为签名包（`.nshpkg`）从 GitHub Release 下发，不用每次重新装 APK。**装一次 `0.1.9 (build 10)` 的 APK 之后**，只改界面、逻辑、图片和字体都可以走 OTA；改 Rust crate、nsh runtime、权限或 manifest 仍然要出新 APK。
+App 的 TSX 可以作为签名包（`.nshpkg`）从 GitHub Release 下发，不用每次重新装 APK。**装一次 `0.1.10 (build 11)` 的 APK 之后**，只改界面、逻辑、图片和字体都可以走 OTA；改 Rust crate、nsh runtime、权限或 manifest 仍然要出新 APK。
 
 - `app/nsh.json` 的 `updater` 指向 `dongjiahong/navigator` 的最新 Release，并写了两个公钥：`publicKey` 验 `latest.json`，`packages.roots` 验 `.nshpkg`。
 - 签名私钥在仓库外：`~/.navigator-ota/`（`root.secret` 离线保存；`release.secret`、`release.cert`、`update.secret` 用于发版）。**不要把任何 `.secret` 提交进仓库。**
-- 没有 CI：发版全在本机。跑 `scripts/ota-release.sh --build 10 --notes CHANGES.md`，把 `dist/*.nshpkg`、`dist/latest.json`、`dist/latest.json.sig` 三个文件连同 APK 一起传到 GitHub Release（顺序：包先，manifest 和签名后）。
+- 没有 CI：发版全在本机。跑 `scripts/ota-release.sh --build 11 --notes CHANGES.md`，把 `dist/*.nshpkg`、`dist/latest.json`、`dist/latest.json.sig` 三个文件连同 APK 一起传到 GitHub Release（顺序：包先，manifest 和签名后）。
 - 每次发版都要把 `app/nsh.json` 的 `build` 加一；`version` 也一起改。App 只在包比当前 build 新时才装。
 - App 启动后 5 秒检查一次；手机在「连到 Mac」Sheet 里还有「检查更新」。Android/iOS 下载后**下次冷启动**运行，桌面可以按「重启」立刻运行。包第一次运行有 10 秒试用期，起不来会自动回退。
 

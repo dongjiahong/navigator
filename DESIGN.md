@@ -419,10 +419,12 @@ enters the board; a screenshot pasted into a title or a note keeps the size the
 platform handed over, because the paste is the fast path and a field cannot
 resize what it is given. The panel, the phone's detail sheet and the capture sheet
 show the same strip: tiles pressed to see one whole, a corner on each to take it
-away, and a 贴图 tile that opens the picker. Pasted files are taken out of the
-paste as pictures; its text still goes into the field. The board itself carries
-only the glyph and, past one, the count — a thumbnail under every title would turn
-a column into a gallery, and the picture is looked at in the card.
+away, and a 贴图 tile that opens the picker. A screenshot also arrives by Cmd+V:
+on the open card, or in a title or a note, the clipboard's picture becomes an
+attachment, and a paste that holds text still types. Pasted files are taken out
+of the paste as pictures; its text still goes into the field. The board itself
+carries only the glyph and, past one, the count — a thumbnail under every title
+would turn a column into a gallery, and the picture is looked at in the card.
 
 **The card is its own handle.** There is no grip glyph on the Mac: a press that
 moves 5 points lifts the card, and a press that does not is the press that opens
